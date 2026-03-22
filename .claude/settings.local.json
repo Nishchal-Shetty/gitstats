@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(source venv/bin/activate)",
+      "Bash(uvicorn main:app --reload)",
+      "Bash(python3 -m venv venv)",
+      "Bash(pip install:*)",
+      "Bash(pip uninstall:*)",
+      "Bash(python -c \"from classifier import classify_repository; print\\(''import OK''\\)\")"
+    ]
+  }
+}

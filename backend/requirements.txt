@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+httpx[http2]
+asyncpg
+sqlalchemy[asyncio]
+alembic
+python-dotenv
+anthropic
+PyGithub
+pydantic
+python-jose[cryptography]
