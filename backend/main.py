@@ -149,6 +149,29 @@ async def stats_repo(owner: str, repo: str, db: AsyncSession = Depends(get_db)):
     else:
         clf = repo_row.classification
 
+        # Re-classify if genre or confidence is missing
+        if clf is None or not clf.genre or clf.genre == "unknown" or clf.confidence is None:
+            log.info("Re-classifying %s (genre=%s, confidence=%s)", full_name, clf.genre if clf else None, clf.confidence if clf else None)
+            try:
+                result = await classify_repository({
+                    "full_name": repo_row.full_name,
+                    "description": repo_row.description,
+                    "readme": repo_row.readme,
+                    "language": repo_row.language,
+                    "topics": repo_row.topics,
+                })
+                if clf is None:
+                    clf = RepoClassification(repo_id=repo_row.id)
+                    db.add(clf)
+                clf.genre = result["genre"]
+                clf.tags = result["tags"]
+                clf.confidence = result["confidence"]
+                await db.commit()
+                await db.refresh(clf)
+                log.info("Re-classified %s → genre=%s confidence=%s", full_name, clf.genre, clf.confidence)
+            except Exception as exc:
+                log.error("Re-classification failed for %s: %s", full_name, exc)
+
     # Genre comparison stats
     genre_stats: dict = {}
     if clf and clf.genre and clf.genre != "unknown":
@@ -259,6 +282,49 @@ async def similar_repos(owner: str, repo: str, db: AsyncSession = Depends(get_db
     similar = similar_result.scalars().all()
 
     return [_repo_dict(r, r.classification) for r in similar]
+
+
+@app.post("/admin/reclassify")
+async def admin_reclassify(db: AsyncSession = Depends(get_db)):
+    """Re-classify all repos in the DB that have genre=null or genre='unknown'."""
+    result = await db.execute(
+        select(Repository)
+        .outerjoin(RepoClassification, RepoClassification.repo_id == Repository.id)
+        .where(
+            (RepoClassification.genre == None) |
+            (RepoClassification.genre == "unknown") |
+            (RepoClassification.id == None)
+        )
+        .options(selectinload(Repository.classification))
+    )
+    repos = result.scalars().all()
+    log.info("admin_reclassify: found %d repos to reclassify", len(repos))
+
+    count = 0
+    for repo_row in repos:
+        try:
+            result = await classify_repository({
+                "full_name": repo_row.full_name,
+                "description": repo_row.description,
+                "readme": repo_row.readme,
+                "language": repo_row.language,
+                "topics": repo_row.topics,
+            })
+            clf = repo_row.classification
+            if clf is None:
+                clf = RepoClassification(repo_id=repo_row.id)
+                db.add(clf)
+            clf.genre = result["genre"]
+            clf.tags = result["tags"]
+            clf.confidence = result["confidence"]
+            await db.flush()
+            count += 1
+            log.info("Reclassified %s → %s (%.2f)", repo_row.full_name, clf.genre, clf.confidence or 0)
+        except Exception as exc:
+            log.error("Reclassify failed for %s: %s", repo_row.full_name, exc)
+
+    await db.commit()
+    return {"reclassified": count}
 
 
 @app.get("/repos/search")

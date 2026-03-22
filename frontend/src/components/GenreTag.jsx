@@ -1,26 +1,38 @@
-const GENRE_COLORS = {
-  "Web Frontend": "bg-blue-900 text-blue-300",
-  "Web Backend": "bg-green-900 text-green-300",
-  "Full Stack": "bg-teal-900 text-teal-300",
-  "Mobile": "bg-purple-900 text-purple-300",
-  "CLI Tool": "bg-yellow-900 text-yellow-300",
-  "Library / SDK": "bg-orange-900 text-orange-300",
-  "DevOps / Infrastructure": "bg-red-900 text-red-300",
-  "Data Science / ML": "bg-pink-900 text-pink-300",
-  "Game Development": "bg-indigo-900 text-indigo-300",
-  "Security / Cryptography": "bg-rose-900 text-rose-300",
-  "Embedded / IoT": "bg-cyan-900 text-cyan-300",
-  "Desktop App": "bg-violet-900 text-violet-300",
-  "API / Integration": "bg-lime-900 text-lime-300",
-  "Documentation": "bg-gray-800 text-gray-300",
-  "Other": "bg-gray-800 text-gray-400",
+const GENRE_STYLES = {
+  web_frontend:    { bg: "#1c2d3d", text: "#79c0ff" },
+  web_backend:     { bg: "#1c2d1c", text: "#56d364" },
+  mobile:          { bg: "#2d1c3d", text: "#d2a8ff" },
+  devtools:        { bg: "#2d2d1c", text: "#e3b341" },
+  data_science:    { bg: "#3d1c2d", text: "#ff7b72" },
+  infrastructure:  { bg: "#1c3d3d", text: "#39d3c3" },
+  security:        { bg: "#3d1c1c", text: "#ffa657" },
+  game_dev:        { bg: "#1c1c3d", text: "#79c0ff" },
+  systems:         { bg: "#2d1c1c", text: "#ffa657" },
+  open_source_lib: { bg: "#1e2d1e", text: "#56d364" },
 };
 
-export default function GenreTag({ genre, small = false }) {
-  const color = GENRE_COLORS[genre] || GENRE_COLORS["Other"];
+const FALLBACK = { bg: "#21262d", text: "#8b949e" };
+
+export default function GenreTag({ genre, confidence }) {
+  if (!genre || genre === "unknown") return null;
+  const { bg, text } = GENRE_STYLES[genre] ?? FALLBACK;
+  const label = genre.replace(/_/g, " ");
+  const pct = confidence != null ? Math.round(confidence * 100) : null;
+
   return (
-    <span className={`${color} ${small ? "text-xs px-2 py-0.5" : "text-sm px-3 py-1"} rounded-full font-medium whitespace-nowrap`}>
-      {genre}
+    <span
+      className="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full"
+      style={{ backgroundColor: bg, color: text }}
+    >
+      {label}
+      {pct != null && (
+        <span
+          className="rounded-full px-1.5 py-0.5 text-[10px] font-semibold"
+          style={{ backgroundColor: "rgba(0,0,0,0.25)", color: text }}
+        >
+          {pct}%
+        </span>
+      )}
     </span>
   );
 }
