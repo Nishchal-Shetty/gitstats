@@ -1,2 +1,17 @@
+# Secrets
 backend/.env
 frontend/.env
+
+# Python
+**/__pycache__/
+**/*.pyc
+venv/
+*.egg-info/
+.pytest_cache/
+
+# Node
+node_modules/
+dist/
+
+# OS
+.DS_Store
