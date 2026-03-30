@@ -98,14 +98,6 @@ jobs:
           VITE_API_URL=${{ secrets.VITE_API_URL }}
           VITE_GITHUB_CLIENT_ID=${{ secrets.VITE_GITHUB_CLIENT_ID }}
 
-    - name: Enable required GCP APIs
-      if: github.event_name != 'pull_request'
-      run: |
-        gcloud services enable run.googleapis.com \
-          cloudbuild.googleapis.com \
-          artifactregistry.googleapis.com \
-          --project=${{ secrets.GCP_PROJECT_ID }}
-
     # Deploy Backend to Cloud Run
     - name: Deploy to Cloud Run (backend)
       if: github.event_name != 'pull_request'
