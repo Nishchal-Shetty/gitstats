@@ -41,6 +41,15 @@
 - Anthropic API key
 - Supabase project (free tier)
 
+### Docker Setup
+
+```bash
+docker compose build
+docker compose up
+```
+
+If you build and run the docker containers locally with the above two commands, you can skip the following backend and frontend setup steps. You will still need to fill in the environment variables.
+
 ### Backend Setup
 
 ```bash
