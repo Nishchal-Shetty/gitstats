@@ -106,7 +106,7 @@ jobs:
       run: |
         gcloud run deploy gitstats-backend \
           --project=${{ secrets.GCP_PROJECT_ID }} \
-          --image=${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GCP_REPOSITORY }}/backend:latest \
+          --image=${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GCP_REPOSITORY }}/backend:main \
           --region=${{ env.GCP_REGION }} \
           --platform=managed \
           --allow-unauthenticated \
