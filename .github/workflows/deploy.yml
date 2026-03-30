@@ -52,8 +52,10 @@ jobs:
         project_id: ${{ secrets.GCP_PROJECT_ID }}
 
     - name: Set GCP project
-      if: github.event_name != 'pull_request'
       run: gcloud config set project ${{ secrets.GCP_PROJECT_ID }}
+
+    - name: Verify project
+      run: gcloud config list
 
     - name: Configure Docker for GCP
       if: github.event_name != 'pull_request'
@@ -103,6 +105,7 @@ jobs:
       if: github.event_name != 'pull_request'
       run: |
         gcloud run deploy gitstats-backend \
+          --project=${{ secrets.GCP_PROJECT_ID }} \
           --image=${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GCP_REPOSITORY }}/backend:latest \
           --region=${{ env.GCP_REGION }} \
           --platform=managed \
