@@ -1,4 +1,4 @@
-name: Build & Deploy (Docker + GCP + Release)
+name: Build & Deploy
 
 on:
   push:
@@ -115,9 +115,6 @@ jobs:
           --format='value(status.url)')
         echo "backend_url=$URL" >> $GITHUB_OUTPUT
 
-    - name: Debug backend URL
-      run: echo "Backend URL is ${{ steps.backend-url.outputs.backend_url }}"
-        
     # Frontend (build-time env)
     - name: Build & push frontend
       uses: docker/build-push-action@v5
@@ -141,13 +138,6 @@ jobs:
           --platform=managed \
           --region=${{ env.GCP_REGION }} \
           --allow-unauthenticated
-          
-    - name: Get frontend URL
-      run: |
-        gcloud run services describe gitstats-frontend \
-          --project=${{ secrets.GCP_PROJECT_ID }} \
-          --region ${{ env.GCP_REGION }} \
-          --format 'value(status.url)'
 
     # Release
     - name: Create GitHub Release
