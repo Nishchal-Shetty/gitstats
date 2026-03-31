@@ -6,10 +6,7 @@ import {
 } from "recharts";
 import GenreTag from "../components/GenreTag";
 
-const API =
-  window.__CONFIG__?.API_URL ||
-  import.meta.env.VITE_API_URL;
-//const API = import.meta.env.VITE_API_URL || "http://localhost:8000";
+const API = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
 const COLOR_A = "#388bfd";
 const COLOR_B = "#ffa657";
