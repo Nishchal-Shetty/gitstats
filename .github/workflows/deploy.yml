@@ -111,9 +111,12 @@ jobs:
       run: |
         URL=$(gcloud run services describe gitstats-backend \
           --project=${{ secrets.GCP_PROJECT_ID }} \
-          --region ${{ env.GCP_REGION }} \
-          --format 'value(status.url)')
-        echo "BACKEND_URL=$URL" >> $GITHUB_ENV
+          --region=${{ env.GCP_REGION }} \
+          --format='value(status.url)')
+        echo "backend_url=$URL" >> $GITHUB_OUTPUT
+
+    - name: Debug backend URL
+      run: echo "Backend URL is: ${{ steps.backend-url.outputs.backend_url }}"
         
     # Frontend (build-time env)
     - name: Build & push frontend
@@ -125,7 +128,7 @@ jobs:
         tags: ${{ steps.meta-frontend.outputs.tags }}
         labels: ${{ steps.meta-frontend.outputs.labels }}
         build-args: |
-          VITE_API_URL=$BACKEND_URL
+          VITE_API_URL=${{ steps.backend-url.outputs.backend_url }}
           VITE_GITHUB_CLIENT_ID=${{ secrets.GIT_CLIENT_ID }}
 
     # Deploy Frontend to Cloud Run

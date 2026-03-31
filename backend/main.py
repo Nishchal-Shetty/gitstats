@@ -32,7 +32,7 @@ app = FastAPI(title="GitStats API", version="1.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=["http://localhost:5173","https://gitstats-frontend-53707559181.us-central1.run.app"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
