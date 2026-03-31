@@ -8,7 +8,10 @@ import StatCard from "../components/StatCard";
 import GenreTag from "../components/GenreTag";
 import SimilarRepos from "../components/SimilarRepos";
 
-const API = import.meta.env.VITE_API_URL || "http://localhost:8000";
+const API =
+  window.__CONFIG__?.API_URL ||
+  import.meta.env.VITE_API_URL;
+//const API = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
 function CustomTooltip({ active, payload, label }) {
   if (!active || !payload?.length) return null;
