@@ -116,7 +116,7 @@ jobs:
         echo "backend_url=$URL" >> $GITHUB_OUTPUT
 
     - name: Debug backend URL
-      run: echo "Backend URL is: ${{ steps.backend-url.outputs.backend_url }}"
+      run: echo "Backend URL is ${{ steps.backend-url.outputs.backend_url }}"
         
     # Frontend (build-time env)
     - name: Build & push frontend
