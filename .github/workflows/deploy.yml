@@ -87,19 +87,6 @@ jobs:
         tags: ${{ steps.meta-backend.outputs.tags }}
         labels: ${{ steps.meta-backend.outputs.labels }}
 
-    # Frontend (build-time env)
-    - name: Build & push frontend
-      uses: docker/build-push-action@v5
-      with:
-        context: ./frontend
-        file: ./frontend/Dockerfile
-        push: ${{ github.event_name != 'pull_request' }}
-        tags: ${{ steps.meta-frontend.outputs.tags }}
-        labels: ${{ steps.meta-frontend.outputs.labels }}
-        build-args: |
-          VITE_API_URL=${{ secrets.VITE_API_URL }}
-          VITE_GITHUB_CLIENT_ID=${{ secrets.VITE_GITHUB_CLIENT_ID }}
-
     # Deploy Backend to Cloud Run
     - name: Deploy to Cloud Run (backend)
       if: github.event_name != 'pull_request'
@@ -117,8 +104,45 @@ jobs:
             GIT_CLIENT_ID=${{ secrets.GIT_CLIENT_ID }},
             GIT_CLIENT_SECRET=${{ secrets.GIT_CLIENT_SECRET }},
             ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }},
-            FRONTEND_URL=${{ secrets.FRONTEND_URL }}
-          "
+            FRONTEND_URL=${{ secrets.FRONTEND_URL }}"
+
+    - name: Get backend URL
+      id: backend-url
+      run: |
+        URL=$(gcloud run services describe gitstats-backend \
+          --region ${{ env.GCP_REGION }} \
+          --format 'value(status.url)')
+        echo "BACKEND_URL=$URL" >> $GITHUB_ENV
+        
+    # Frontend (build-time env)
+    - name: Build & push frontend
+      uses: docker/build-push-action@v5
+      with:
+        context: ./frontend
+        file: ./frontend/Dockerfile
+        push: ${{ github.event_name != 'pull_request' }}
+        tags: ${{ steps.meta-frontend.outputs.tags }}
+        labels: ${{ steps.meta-frontend.outputs.labels }}
+        build-args: |
+          VITE_API_URL=$BACKEND_URL
+          VITE_GITHUB_CLIENT_ID=${{ secrets.GIT_CLIENT_ID }}
+
+    # Deploy Frontend to Cloud Run
+    - name: Deploy to Cloud Run (frontend)
+      if: github.event_name != 'pull_request'
+      run: |
+        gcloud run deploy gitstats-frontend \
+          --project=${{ secrets.GCP_PROJECT_ID }} \
+          --image=${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GCP_REPOSITORY }}/frontend:main \
+          --platform=managed \
+          --region=${{ env.GCP_REGION }} \
+          --allow-unauthenticated
+          
+    - name: Get frontend URL
+      run: |
+        gcloud run services describe gitstats-frontend \
+          --region ${{ env.GCP_REGION }} \
+          --format 'value(status.url)'
 
     # Release
     - name: Create GitHub Release
