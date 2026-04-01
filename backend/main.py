@@ -49,6 +49,12 @@ class ScrapeRequest(BaseModel):
     repos_per_genre: int = 50
 
 
+class RecommendationsRefineRequest(BaseModel):
+    username: str
+    prompt: str
+    repos: list[dict]
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -349,3 +355,143 @@ async def search_repos(q: str = Query(..., min_length=2), db: AsyncSession = Dep
     )
     repos = result.scalars().all()
     return [_repo_dict(r, r.classification) for r in repos]
+
+
+# ---------------------------------------------------------------------------
+# Recommendations endpoints
+# ---------------------------------------------------------------------------
+
+@app.get("/recommendations/{username}")
+async def get_recommendations(username: str, db: AsyncSession = Depends(get_db)):
+    """
+    Return up to 20 public repos the developer might want to contribute to,
+    based on their top languages and past repo genres.
+    """
+    # 1. Fetch developer info (top_languages; may hit GitHub if not cached)
+    try:
+        from scraper import get_developer_stats
+        dev_data = await get_developer_stats(username)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Could not fetch developer profile: {exc}")
+
+    top_languages = dev_data.get("top_languages") or []
+
+    # 2. Find genres the user already works in (via their own repos in DB)
+    own_prefix = f"{username}/%"
+    own_genre_result = await db.execute(
+        select(RepoClassification.genre)
+        .join(Repository, Repository.id == RepoClassification.repo_id)
+        .where(Repository.full_name.ilike(own_prefix))
+        .distinct()
+    )
+    user_genres = [row[0] for row in own_genre_result.all() if row[0] and row[0] != "unknown"]
+
+    # 3. Query repos NOT owned by this user
+    base_query = (
+        select(Repository)
+        .where(~Repository.full_name.ilike(own_prefix))
+        .options(selectinload(Repository.classification))
+        .order_by(Repository.stars.desc())
+    )
+
+    recommended_repos = []
+
+    # Priority 1: repos in the same genres
+    if user_genres:
+        genre_result = await db.execute(
+            base_query
+            .join(RepoClassification, RepoClassification.repo_id == Repository.id)
+            .where(RepoClassification.genre.in_(user_genres))
+            .limit(20)
+        )
+        recommended_repos = genre_result.scalars().all()
+
+    # Priority 2: fallback — match by primary language
+    if len(recommended_repos) < 10 and top_languages:
+        lang_result = await db.execute(
+            base_query
+            .where(Repository.language.in_(top_languages))
+            .limit(20)
+        )
+        lang_repos = lang_result.scalars().all()
+        existing_ids = {r.id for r in recommended_repos}
+        for r in lang_repos:
+            if r.id not in existing_ids:
+                recommended_repos.append(r)
+                existing_ids.add(r.id)
+            if len(recommended_repos) >= 20:
+                break
+
+    # Priority 3: fallback — top-starred repos in DB
+    if len(recommended_repos) < 5:
+        fallback_result = await db.execute(
+            base_query.limit(20)
+        )
+        fallback_repos = fallback_result.scalars().all()
+        existing_ids = {r.id for r in recommended_repos}
+        for r in fallback_repos:
+            if r.id not in existing_ids:
+                recommended_repos.append(r)
+            if len(recommended_repos) >= 20:
+                break
+
+    return {
+        "username": username,
+        "top_languages": top_languages,
+        "user_genres": user_genres,
+        "recommendations": [_repo_dict(r, r.classification) for r in recommended_repos[:20]],
+    }
+
+
+@app.post("/recommendations/refine")
+async def refine_recommendations(body: RecommendationsRefineRequest):
+    """
+    Use Claude to filter / re-rank the provided repo list based on a free-text prompt.
+    Returns the repos reordered / filtered according to the AI's judgment.
+    """
+    import json as _json
+    import anthropic as _anthropic
+
+    if not body.repos:
+        return {"repos": []}
+
+    repo_summaries = []
+    for i, r in enumerate(body.repos):
+        repo_summaries.append(
+            f"{i}: {r.get('full_name', '?')} | "
+            f"lang={r.get('language', '?')} | "
+            f"genre={r.get('genre', '?')} | "
+            f"stars={r.get('stars', 0)} | "
+            f"desc={str(r.get('description', ''))[:120]}"
+        )
+
+    prompt = f"""You are helping a GitHub developer named '{body.username}' find public repos to contribute to.
+
+The user says: "{body.prompt}"
+
+Below is a numbered list of candidate repositories (index: full_name | lang | genre | stars | description):
+{chr(10).join(repo_summaries)}
+
+Return ONLY valid JSON — a list of integer indices for the repos that best match the user's request, ordered by relevance (most relevant first). Include at most 10. Example: [3, 0, 7]"""
+
+    client = _anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+    try:
+        message = await client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=256,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = message.content[0].text.strip()
+        # Strip markdown if present
+        if raw.startswith("```"):
+            raw = "\n".join(l for l in raw.splitlines() if not l.startswith("```")).strip()
+        indices = _json.loads(raw)
+        if not isinstance(indices, list):
+            raise ValueError("Expected a list")
+        refined = [body.repos[i] for i in indices if isinstance(i, int) and 0 <= i < len(body.repos)]
+    except Exception as exc:
+        log.error("refine_recommendations: Claude error: %s", exc)
+        # Graceful degradation: return original list
+        refined = body.repos
+
+    return {"repos": refined}

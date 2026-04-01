@@ -5,6 +5,7 @@ import RepoDashboard from "./pages/RepoDashboard";
 import DevDashboard from "./pages/DevDashboard";
 import Compare from "./pages/Compare";
 import AuthCallback from "./pages/AuthCallback";
+import Recommendations from "./pages/Recommendations";
 
 const GITHUB_CLIENT_ID = import.meta.env.VITE_GITHUB_CLIENT_ID;
 
@@ -73,6 +74,14 @@ function Navbar() {
           >
             Compare
           </NavLink>
+          <NavLink
+            to="/recommendations"
+            className={({ isActive }) =>
+              `text-sm transition ${isActive ? "text-white" : "text-gray-400 hover:text-white"}`
+            }
+          >
+            Recommendations
+          </NavLink>
           {!loading && (user ? <UserMenu /> : <LoginButton />)}
         </div>
       </div>
@@ -90,6 +99,7 @@ export default function App() {
           <Route path="/repo/:owner/:repo" element={<RepoDashboard />} />
           <Route path="/dev/:username" element={<DevDashboard />} />
           <Route path="/compare" element={<Compare />} />
+          <Route path="/recommendations" element={<Recommendations />} />
           <Route path="/auth/callback" element={<AuthCallback />} />
         </Routes>
       </div>
