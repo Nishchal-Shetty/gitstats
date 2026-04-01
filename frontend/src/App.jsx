@@ -3,6 +3,7 @@ import Home from "./pages/Home";
 import RepoDashboard from "./pages/RepoDashboard";
 import DevDashboard from "./pages/DevDashboard";
 import Compare from "./pages/Compare";
+import Recommendations from "./pages/Recommendations";
 
 function Navbar() {
   return (
@@ -29,6 +30,14 @@ function Navbar() {
           >
             Compare
           </NavLink>
+          <NavLink
+            to="/recommendations"
+            className={({ isActive }) =>
+              `text-sm transition ${isActive ? "text-white" : "text-gray-400 hover:text-white"}`
+            }
+          >
+            Recommendations
+          </NavLink>
         </div>
       </div>
     </nav>
@@ -44,6 +53,7 @@ export default function App() {
         <Route path="/repo/:owner/:repo" element={<RepoDashboard />} />
         <Route path="/dev/:username" element={<DevDashboard />} />
         <Route path="/compare" element={<Compare />} />
+        <Route path="/recommendations" element={<Recommendations />} />
       </Routes>
     </div>
   );
