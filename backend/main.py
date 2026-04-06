@@ -11,6 +11,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from metrics import PrometheusHTTPMiddleware, metrics_response
 from classifier import classify_repository
 from database import Developer, Repository, RepoClassification, get_db, init_db
 from scraper import get_developer_stats, get_repository_details, scrape_and_store, strip_tz
@@ -37,6 +38,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(PrometheusHTTPMiddleware)
 
 
 # ---------------------------------------------------------------------------
@@ -121,6 +123,11 @@ async def _fetch_classify_store(full_name: str, db: AsyncSession) -> tuple[Repos
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+@app.get("/metrics")
+async def metrics():
+    return metrics_response()
 
 
 @app.post("/scrape/start")
