@@ -73,6 +73,19 @@ class Developer(Base):
     fetched_at = Column(DateTime, server_default=func.now())
 
 
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    github_id = Column(Integer, unique=True, nullable=False)
+    username = Column(String, nullable=False)
+    display_name = Column(String, nullable=True)
+    avatar_url = Column(String, nullable=True)
+    email = Column(String, nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+    last_login = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
 async def get_db():
     async with AsyncSessionLocal() as session:
         yield session

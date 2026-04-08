@@ -12,8 +12,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from classifier import classify_repository
-from database import Developer, Repository, RepoClassification, get_db, init_db
-from scraper import get_developer_stats, get_repository_details, scrape_and_store, strip_tz
+from auth import create_access_token, exchange_code_for_token, get_current_user
+from database import Developer, Repository, RepoClassification, User, get_db, init_db
+from scraper import fetch_github_user, get_developer_stats, get_repository_details, scrape_and_store, strip_tz
 
 load_dotenv()
 log = logging.getLogger(__name__)
@@ -121,6 +122,94 @@ async def _fetch_classify_store(full_name: str, db: AsyncSession) -> tuple[Repos
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
+# Auth endpoints
+# ---------------------------------------------------------------------------
+
+class GitHubAuthRequest(BaseModel):
+    code: str
+
+
+@app.post("/auth/github")
+async def auth_github(body: GitHubAuthRequest, db: AsyncSession = Depends(get_db)):
+    """Exchange GitHub OAuth code for a JWT. Creates user if new, updates last_login if existing."""
+    # 1. Exchange code for GitHub access token
+    try:
+        gh_token = await exchange_code_for_token(body.code)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"GitHub OAuth failed: {exc}")
+
+    # 2. Fetch GitHub user profile
+    try:
+        gh_user = await fetch_github_user(gh_token)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to fetch GitHub user: {exc}")
+
+    github_id = gh_user["id"]
+    username = gh_user["login"]
+
+    # 3. Find or create user
+    result = await db.execute(select(User).where(User.github_id == github_id))
+    user = result.scalar_one_or_none()
+
+    if user is None:
+        # Register new user
+        user = User(
+            github_id=github_id,
+            username=username,
+            display_name=gh_user.get("name"),
+            avatar_url=gh_user.get("avatar_url"),
+            email=gh_user.get("email"),
+        )
+        db.add(user)
+        await db.commit()
+        await db.refresh(user)
+        log.info("Registered new user: %s (github_id=%d)", username, github_id)
+    else:
+        # Update existing user on login
+        user.last_login = datetime.utcnow()
+        user.avatar_url = gh_user.get("avatar_url", user.avatar_url)
+        user.display_name = gh_user.get("name", user.display_name)
+        await db.commit()
+        await db.refresh(user)
+        log.info("User logged in: %s (github_id=%d)", username, github_id)
+
+    # 4. Issue JWT
+    token = create_access_token({"sub": str(user.github_id), "username": user.username})
+
+    return {
+        "token": token,
+        "user": {
+            "id": user.id,
+            "github_id": user.github_id,
+            "username": user.username,
+            "display_name": user.display_name,
+            "avatar_url": user.avatar_url,
+            "email": user.email,
+        },
+    }
+
+
+@app.get("/auth/me")
+async def auth_me(current_user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    """Return the currently authenticated user's profile."""
+    github_id = int(current_user["sub"])
+    result = await db.execute(select(User).where(User.github_id == github_id))
+    user = result.scalar_one_or_none()
+
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    return {
+        "id": user.id,
+        "github_id": user.github_id,
+        "username": user.username,
+        "display_name": user.display_name,
+        "avatar_url": user.avatar_url,
+        "email": user.email,
+    }
 
 
 @app.post("/scrape/start")
