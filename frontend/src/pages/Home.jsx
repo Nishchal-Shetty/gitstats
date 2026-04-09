@@ -1,9 +1,18 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 
+function parseGitHubInput(value) {
+  const urlMatch = value.match(/github\.com\/([^/\s]+)\/([^/\s?#]+)/);
+  if (urlMatch) return { owner: urlMatch[1], repo: urlMatch[2].replace(/\/$/, "") };
+  const slashMatch = value.match(/^([^/\s]+)\/([^/\s]+)$/);
+  if (slashMatch) return { owner: slashMatch[1], repo: slashMatch[2] };
+  return null;
+}
+
 function RepoCard() {
   const [owner, setOwner] = useState("");
   const [repo, setRepo] = useState("");
+  const [url, setUrl] = useState("");
   const navigate = useNavigate();
 
   const handleSubmit = (e) => {
@@ -11,6 +20,13 @@ function RepoCard() {
     if (owner.trim() && repo.trim()) {
       navigate(`/repo/${owner.trim()}/${repo.trim()}`);
     }
+  };
+
+  const handleUrlChange = (e) => {
+    const val = e.target.value;
+    setUrl(val);
+    const parsed = parseGitHubInput(val);
+    if (parsed) { setOwner(parsed.owner); setRepo(parsed.repo); }
   };
 
   return (
@@ -44,6 +60,21 @@ function RepoCard() {
             className="w-full rounded-md border border-gray-600 bg-gray-900 text-white placeholder-gray-500 px-3 py-2 text-sm focus:outline-none focus:border-indigo-500"
           />
         </div>
+        <div className="flex items-center gap-2 my-1">
+          <div className="flex-1 h-px bg-gray-700" />
+          <span className="text-xs text-gray-500">OR</span>
+          <div className="flex-1 h-px bg-gray-700" />
+        </div>
+        <div>
+          <label className="block text-xs text-gray-400 mb-1">GitHub URL</label>
+          <input
+            type="text"
+            value={url}
+            onChange={handleUrlChange}
+            placeholder="e.g. https://github.com/facebook/react"
+            className="w-full rounded-md border border-gray-600 bg-gray-900 text-white placeholder-gray-500 px-3 py-2 text-sm focus:outline-none focus:border-indigo-500"
+          />
+        </div>
         <button
           type="submit"
           disabled={!owner.trim() || !repo.trim()}
@@ -59,8 +90,14 @@ function RepoCard() {
   );
 }
 
+function parseGitHubProfileUrl(value) {
+  const match = value.match(/github\.com\/([^/\s?#]+)/);
+  return match ? match[1] : null;
+}
+
 function DevCard() {
   const [username, setUsername] = useState("");
+  const [profileUrl, setProfileUrl] = useState("");
   const navigate = useNavigate();
 
   const handleSubmit = (e) => {
@@ -68,6 +105,13 @@ function DevCard() {
     if (username.trim()) {
       navigate(`/dev/${username.trim()}`);
     }
+  };
+
+  const handleProfileUrlChange = (e) => {
+    const val = e.target.value;
+    setProfileUrl(val);
+    const parsed = parseGitHubProfileUrl(val);
+    if (parsed) setUsername(parsed);
   };
 
   return (
@@ -91,12 +135,25 @@ function DevCard() {
             className="w-full rounded-md border border-gray-600 bg-gray-900 text-white placeholder-gray-500 px-3 py-2 text-sm focus:outline-none focus:border-indigo-500"
           />
         </div>
-        {/* spacer to align button with repo card */}
-        <div className="flex-1" />
+        <div className="flex items-center gap-2 my-1">
+          <div className="flex-1 h-px bg-gray-700" />
+          <span className="text-xs text-gray-500">OR</span>
+          <div className="flex-1 h-px bg-gray-700" />
+        </div>
+        <div>
+          <label className="block text-xs text-gray-400 mb-1">GitHub Profile URL</label>
+          <input
+            type="text"
+            value={profileUrl}
+            onChange={handleProfileUrlChange}
+            placeholder="e.g. https://github.com/torvalds"
+            className="w-full rounded-md border border-gray-600 bg-gray-900 text-white placeholder-gray-500 px-3 py-2 text-sm focus:outline-none focus:border-indigo-500"
+          />
+        </div>
         <button
           type="submit"
           disabled={!username.trim()}
-          className="w-full py-2 rounded-md text-sm font-medium text-white transition disabled:opacity-40 disabled:cursor-not-allowed"
+          className="mt-auto w-full py-2 rounded-md text-sm font-medium text-white transition disabled:opacity-40 disabled:cursor-not-allowed"
           style={{ backgroundColor: "#238636" }}
           onMouseEnter={(e) => { if (!e.currentTarget.disabled) e.currentTarget.style.backgroundColor = "#2ea043"; }}
           onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "#238636"; }}

@@ -11,7 +11,24 @@ const API = import.meta.env.VITE_API_URL;
 const COLOR_A = "#388bfd";
 const COLOR_B = "#ffa657";
 
-function RepoInput({ label, owner, repo, onOwner, onRepo }) {
+function parseGitHubInput(value) {
+  const urlMatch = value.match(/github\.com\/([^/\s]+)\/([^/\s?#]+)/);
+  if (urlMatch) return { owner: urlMatch[1], repo: urlMatch[2].replace(/\/$/, "") };
+  const slashMatch = value.match(/^([^/\s]+)\/([^/\s]+)$/);
+  if (slashMatch) return { owner: slashMatch[1], repo: slashMatch[2] };
+  return null;
+}
+
+function RepoInput({ label, owner, repo, onOwner, onRepo, onParsed }) {
+  const [url, setUrl] = useState("");
+
+  const handleUrlChange = (e) => {
+    const val = e.target.value;
+    setUrl(val);
+    const parsed = parseGitHubInput(val);
+    if (parsed) onParsed(parsed.owner, parsed.repo);
+  };
+
   return (
     <div
       className="flex-1 rounded-lg border border-gray-700 p-5"
@@ -36,6 +53,21 @@ function RepoInput({ label, owner, repo, onOwner, onRepo }) {
             value={repo}
             onChange={(e) => onRepo(e.target.value)}
             placeholder="e.g. react"
+            className="w-full rounded-md border border-gray-600 bg-gray-900 text-white placeholder-gray-600 px-3 py-2 text-sm focus:outline-none focus:border-indigo-500"
+          />
+        </div>
+        <div className="flex items-center gap-2 my-1">
+          <div className="flex-1 h-px bg-gray-700" />
+          <span className="text-xs text-gray-500">OR</span>
+          <div className="flex-1 h-px bg-gray-700" />
+        </div>
+        <div>
+          <label className="block text-xs text-gray-500 mb-1">GitHub URL</label>
+          <input
+            type="text"
+            value={url}
+            onChange={handleUrlChange}
+            placeholder="e.g. https://github.com/facebook/react"
             className="w-full rounded-md border border-gray-600 bg-gray-900 text-white placeholder-gray-600 px-3 py-2 text-sm focus:outline-none focus:border-indigo-500"
           />
         </div>
@@ -154,9 +186,9 @@ export default function Compare() {
       {/* Inputs */}
       <form onSubmit={handleCompare}>
         <div className="flex flex-col sm:flex-row gap-4 mb-4">
-          <RepoInput label="Repository A" owner={ownerA} repo={repoA} onOwner={setOwnerA} onRepo={setRepoA} />
+          <RepoInput label="Repository A" owner={ownerA} repo={repoA} onOwner={setOwnerA} onRepo={setRepoA} onParsed={(o, r) => { setOwnerA(o); setRepoA(r); }} />
           <div className="flex items-center justify-center text-gray-600 text-xl font-light select-none">vs</div>
-          <RepoInput label="Repository B" owner={ownerB} repo={repoB} onOwner={setOwnerB} onRepo={setRepoB} />
+          <RepoInput label="Repository B" owner={ownerB} repo={repoB} onOwner={setOwnerB} onRepo={setRepoB} onParsed={(o, r) => { setOwnerB(o); setRepoB(r); }} />
         </div>
         <div className="flex justify-center">
           <button
