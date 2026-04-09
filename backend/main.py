@@ -261,12 +261,18 @@ async def similar_repos(owner: str, repo: str, db: AsyncSession = Depends(get_db
     )
     repo_row = result.scalar_one_or_none()
 
-    if repo_row is None or repo_row.classification is None:
-        raise HTTPException(status_code=404, detail="Repo not found in DB. Fetch /stats/repo first.")
+    if repo_row is None:
+        try:
+            repo_row, clf = await _fetch_classify_store(full_name, db)
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=str(exc))
+    else:
+        clf = repo_row.classification
 
-    genre = repo_row.classification.genre
-    if not genre or genre == "unknown":
+    if clf is None or not clf.genre or clf.genre == "unknown":
         raise HTTPException(status_code=404, detail="No genre classification available for this repo.")
+
+    genre = clf.genre
 
     similar_result = await db.execute(
         select(Repository)
