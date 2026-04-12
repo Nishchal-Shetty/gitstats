@@ -135,23 +135,18 @@ jobs:
           --from-literal=ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }} \
           --dry-run=client -o yaml | kubectl apply -f -
 
-    - name: Apply Kubernetes manifests
+    - name: Deploy backend (inject image)
       run: |
-        kubectl apply -f k8s/
+        kubectl set image -f k8s/backend-deployment.yaml \
+          backend=${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GCP_REPOSITORY }}/backend:${{ steps.version.outputs.tag }} \
+          --local -o yaml | kubectl apply -f -
 
-    - name: Wait for ingress IP
+    - name: Deploy frontend (inject image)
       run: |
-        kubectl wait --for=condition=available --timeout=300s deployment/backend
-        kubectl wait --for=condition=available --timeout=300s deployment/frontend
-
-    - name: Update backend image
-      run: |
-        kubectl set image deployment/backend backend=${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GCP_REPOSITORY }}/backend:${{ steps.version.outputs.tag }}
-
-    - name: Update frontend image
-      run: |
-        kubectl set image deployment/frontend frontend=${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GCP_REPOSITORY }}/frontend:${{ steps.version.outputs.tag }}
-
+        kubectl set image -f k8s/frontend-deployment.yaml \
+          frontend=${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GCP_REPOSITORY }}/frontend:${{ steps.version.outputs.tag }} \
+          --local -o yaml | kubectl apply -f -
+          
     # Rollout
     - name: Verify rollout
       run: |
