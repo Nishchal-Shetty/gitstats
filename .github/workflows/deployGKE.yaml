@@ -135,18 +135,18 @@ jobs:
           --from-literal=ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }} \
           --dry-run=client -o yaml | kubectl apply -f -
 
-    - name: Deploy backend (inject image)
+    - name: Apply Kubernetes manifests
       run: |
-        kubectl set image -f k8s/backend-deployment.yaml \
-          backend=${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GCP_REPOSITORY }}/backend:${{ steps.version.outputs.tag }} \
-          --local -o yaml | kubectl apply -f -
+        kubectl apply -f k8s/
 
-    - name: Deploy frontend (inject image)
+    - name: Update backend image
       run: |
-        kubectl set image -f k8s/frontend-deployment.yaml \
-          frontend=${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GCP_REPOSITORY }}/frontend:${{ steps.version.outputs.tag }} \
-          --local -o yaml | kubectl apply -f -
-          
+        kubectl set image deployment/backend backend=${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GCP_REPOSITORY }}/backend:${{ steps.version.outputs.tag }}
+
+    - name: Update frontend image
+      run: |
+        kubectl set image deployment/frontend frontend=${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GCP_REPOSITORY }}/frontend:${{ steps.version.outputs.tag }}
+
     # Rollout
     - name: Verify rollout
       run: |
