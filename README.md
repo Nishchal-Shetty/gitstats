@@ -87,7 +87,7 @@ SECRET_KEY=
 
 **frontend/.env**
 ```
-VITE_API_URL=http://localhost:8000
+VITE_API_URL=
 VITE_GITHUB_CLIENT_ID=
 ```
 
