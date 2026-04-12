@@ -14,7 +14,7 @@ spec:
     spec:
       containers:
         - name: backend
-          image: REPLACE_IMAGE
+          image: __BACKEND_IMAGE__
           ports:
             - containerPort: 8080
 

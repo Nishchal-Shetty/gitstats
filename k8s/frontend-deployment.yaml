@@ -14,7 +14,7 @@ spec:
     spec:
       containers:
         - name: frontend
-          image: REPLACE_IMAGE
+          image: __FRONTEND_IMAGE__
           ports:
             - containerPort: 80
 
