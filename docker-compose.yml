@@ -18,12 +18,12 @@ services:
       - "5173:80"
     env_file:
       - frontend/.env
-    depends_on:
-      - backend
 
   prometheus:
     image: prom/prometheus:v2.51.2
     container_name: gitstats-prometheus
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
     command:
@@ -31,12 +31,12 @@ services:
       - --storage.tsdb.path=/prometheus
     ports:
       - "9090:9090"
-    depends_on:
-      - backend
 
   grafana:
     image: grafana/grafana:11.2.0
     container_name: gitstats-grafana
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "3000:3000"
     environment:
