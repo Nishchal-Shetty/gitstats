@@ -1,0 +1,159 @@
+name: Build & Deploy (GKE)
+
+on:
+  workflow_dispatch:
+
+env:
+  REGISTRY_GHCR: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+  GCP_REGION: us-central1
+  GCP_REPOSITORY: git-stats
+  GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+
+  GKE_CLUSTER: autopilot-cluster-1
+  GKE_REGION: us-central1
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - uses: docker/setup-buildx-action@v3
+
+    # Versioning for GitHub tag & release
+    - name: Get next version
+      id: version
+      run: |
+        git fetch --tags
+        latest_tag=$(git tag --sort=-v:refname | head -n 1)
+
+        if [ -z "$latest_tag" ]; then
+          new_tag="v0.1.0"
+        else
+          version=${latest_tag#v}
+          IFS='.' read -r major minor patch <<< "$version"
+          patch=$((patch + 1))
+          new_tag="v$major.$minor.$patch"
+        fi
+
+        echo "tag=$new_tag" >> $GITHUB_OUTPUT
+
+    - name: Create and push tag
+      run: |
+        git config user.name "github-actions"
+        git config user.email "github-actions@github.com"
+        git tag ${{ steps.version.outputs.tag }}
+        git push origin ${{ steps.version.outputs.tag }}
+
+    # Authentication
+    - uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY_GHCR }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - uses: google-github-actions/auth@v2
+      with:
+        workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+        service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+    - uses: google-github-actions/setup-gcloud@v2
+      with:
+        project_id: ${{ env.GCP_PROJECT_ID }}
+
+    - run: gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev
+
+    # GKE Credentials
+    - name: Connect to GKE cluster
+      run: |
+        gcloud container clusters get-credentials $GKE_CLUSTER \
+          --region $GKE_REGION \
+          --project $GCP_PROJECT_ID
+
+    # Create metadata
+    - id: meta-backend
+      uses: docker/metadata-action@v5
+      with:
+        images: |
+          ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}-backend
+          ${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GCP_REPOSITORY }}/backend
+        tags: |
+          type=raw,value=${{ steps.version.outputs.tag }}
+
+    - id: meta-frontend
+      uses: docker/metadata-action@v5
+      with:
+        images: |
+          ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}-frontend
+          ${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GCP_REPOSITORY }}/frontend
+        tags: |
+          type=raw,value=${{ steps.version.outputs.tag }}
+
+    # Build images
+    - name: Build & push backend
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: ./backend/Dockerfile
+        push: true
+        tags: ${{ steps.meta-backend.outputs.tags }}
+
+    - name: Build & push frontend
+      uses: docker/build-push-action@v5
+      with:
+        context: ./frontend
+        file: ./frontend/Dockerfile
+        push: true
+        tags: ${{ steps.meta-frontend.outputs.tags }}
+
+    # Deploy to GKE
+    - name: Create Kubernetes secrets
+      run: |
+        kubectl create secret generic backend-secrets \
+          --from-literal=SUPABASE_URL=${{ secrets.SUPABASE_URL }} \
+          --from-literal=SECRET_KEY=${{ secrets.SECRET_KEY }} \
+          --from-literal=GIT_TOKEN=${{ secrets.GIT_TOKEN }} \
+          --from-literal=GIT_CLIENT_ID=${{ secrets.GIT_CLIENT_ID }} \
+          --from-literal=GIT_CLIENT_SECRET=${{ secrets.GIT_CLIENT_SECRET }} \
+          --from-literal=ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }} \
+          --dry-run=client -o yaml | kubectl apply -f -
+
+    - name: Apply Kubernetes manifests
+      run: |
+        kubectl apply -f k8s/
+
+    - name: Wait for ingress IP
+      run: |
+        kubectl wait --for=condition=available --timeout=300s deployment/backend
+        kubectl wait --for=condition=available --timeout=300s deployment/frontend
+
+    - name: Update backend image
+      run: |
+        kubectl set image deployment/backend backend=${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GCP_REPOSITORY }}/backend:${{ steps.version.outputs.tag }}
+
+    - name: Update frontend image
+      run: |
+        kubectl set image deployment/frontend frontend=${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GCP_REPOSITORY }}/frontend:${{ steps.version.outputs.tag }}
+
+    # Rollout
+    - name: Verify rollout
+      run: |
+        kubectl rollout status deployment/backend
+        kubectl rollout status deployment/frontend
+
+    # Release
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: ${{ steps.version.outputs.tag }}
+        generate_release_notes: true
