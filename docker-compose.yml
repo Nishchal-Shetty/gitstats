@@ -13,12 +13,11 @@ services:
   frontend:
     build:
       context: ./frontend
-      args:
-        VITE_API_URL: ${VITE_API_URL:-http://localhost:8000}
-        VITE_GITHUB_CLIENT_ID: ${VITE_GITHUB_CLIENT_ID:-}
     container_name: gitstats-frontend
     ports:
       - "5173:80"
+    env_file:
+      - frontend/.env
     depends_on:
       - backend
 
