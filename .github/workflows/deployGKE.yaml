@@ -71,6 +71,13 @@ jobs:
       with:
         project_id: ${{ env.GCP_PROJECT_ID }}
 
+    - name: Install GKE auth plugin
+      run: |
+        gcloud components install gke-gcloud-auth-plugin --quiet
+
+    - name: Set auth plugin env
+      run: echo "USE_GKE_GCLOUD_AUTH_PLUGIN=True" >> $GITHUB_ENV
+
     - run: gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev
 
     # GKE Credentials
