@@ -5,7 +5,7 @@ import {
   PieChart, Pie, Cell, Tooltip, ResponsiveContainer, Legend,
 } from "recharts";
 
-const API = "/api";
+const API = import.meta.env.VITE_API_URL;
 
 const LANG_COLORS = [
   "#388bfd", "#56d364", "#d2a8ff", "#ffa657", "#ff7b72",
