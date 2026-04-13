@@ -371,6 +371,36 @@ export default function Recommendations() {
     const [data, setData] = useState(null);   // { username, top_languages, user_genres, recommendations }
     const [displayedRepos, setDisplayed] = useState([]);
 
+    const [resumeFile, setResumeFile] = useState(null);
+    const [resumeKeywords, setResumeKeywords] = useState([]);
+    const [uploadingResume, setUploadingResume] = useState(false);
+    const [uploadError, setUploadError] = useState(null);
+
+    const handleFileUpload = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        setResumeFile(file);
+        setUploadingResume(true);
+        setUploadError(null);
+
+        const formData = new FormData();
+        formData.append("file", file);
+
+        try {
+            const res = await axios.post(`${API}/upload-resume`, formData, {
+                headers: { "Content-Type": "multipart/form-data" }
+            });
+            setResumeKeywords(res.data.keywords || []);
+        } catch (err) {
+            setUploadError(err.response?.data?.detail || "Failed to parse resume.");
+            setResumeKeywords([]);
+        } finally {
+            setUploadingResume(false);
+            // clear the input so user can re-upload if they want
+            e.target.value = null;
+        }
+    };
+
     const handleSubmit = async (e) => {
         e?.preventDefault();
         const u = input.trim();
@@ -381,7 +411,11 @@ export default function Recommendations() {
         setDisplayed([]);
         setUsername(u);
         try {
-            const res = await axios.get(`${API}/recommendations/${u}`);
+            const params = new URLSearchParams();
+            if (resumeKeywords.length > 0) {
+                params.append("resume_keywords", resumeKeywords.join(" "));
+            }
+            const res = await axios.get(`${API}/recommendations/${u}?${params.toString()}`);
             setData(res.data);
             setDisplayed(res.data.recommendations ?? []);
         } catch (err) {
@@ -405,32 +439,61 @@ export default function Recommendations() {
                 </p>
             </div>
 
-            {/* ── Search form ── */}
-            <form onSubmit={handleSubmit} className="flex gap-2 mb-10">
-                <input
-                    type="text"
-                    value={input}
-                    onChange={(e) => setInput(e.target.value)}
-                    placeholder="GitHub username (e.g. torvalds)"
-                    className="flex-1 rounded-lg border border-gray-600 bg-gray-900 text-white placeholder-gray-500 px-4 py-2.5 text-sm focus:outline-none focus:border-indigo-500 transition"
-                />
-                <button
-                    type="submit"
-                    disabled={!input.trim() || loading}
-                    className="px-5 py-2.5 rounded-lg text-sm font-medium text-white transition disabled:opacity-40 disabled:cursor-not-allowed"
-                    style={{ backgroundColor: "#238636" }}
-                    onMouseEnter={(e) => { if (!e.currentTarget.disabled) e.currentTarget.style.backgroundColor = "#2ea043"; }}
-                    onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "#238636"; }}
-                >
-                    {loading ? "Loading…" : "Get Recommendations"}
-                </button>
-            </form>
+            {/* ── Search form & Upload ── */}
+            <div className="flex flex-col md:flex-row gap-4 mb-4">
+                <form onSubmit={handleSubmit} className="flex gap-2 flex-1">
+                    <input
+                        type="text"
+                        value={input}
+                        onChange={(e) => setInput(e.target.value)}
+                        placeholder="GitHub username (e.g. torvalds)"
+                        className="flex-1 rounded-lg border border-gray-600 bg-gray-900 text-white placeholder-gray-500 px-4 py-2.5 text-sm focus:outline-none focus:border-indigo-500 transition"
+                    />
+                    <button
+                        type="submit"
+                        disabled={!input.trim() || loading}
+                        className="px-5 py-2.5 rounded-lg text-sm font-medium text-white transition disabled:opacity-40 disabled:cursor-not-allowed"
+                        style={{ backgroundColor: "#238636" }}
+                        onMouseEnter={(e) => { if (!e.currentTarget.disabled) e.currentTarget.style.backgroundColor = "#2ea043"; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "#238636"; }}
+                    >
+                        {loading ? "Loading…" : "Get Recommendations"}
+                    </button>
+                </form>
+
+                <div className="flex items-center gap-3 bg-gray-900 border border-gray-600 rounded-lg px-4 py-2 min-w-[240px]">
+                    <label className={`text-sm ${uploadingResume ? 'text-gray-500' : 'text-gray-300 hover:text-indigo-400 cursor-pointer'} transition flex items-center gap-2 truncate`}>
+                        📄 <span>{uploadingResume ? "Parsing resume…" : resumeFile ? resumeFile.name : "Upload Resume (PDF)"}</span>
+                        <input type="file" accept="application/pdf" className="hidden" onChange={handleFileUpload} disabled={uploadingResume} />
+                    </label>
+                    {resumeKeywords.length > 0 && !uploadingResume && (
+                        <span className="text-xs text-indigo-400 font-medium bg-indigo-900/30 px-2 py-0.5 rounded ml-auto">
+                            {resumeKeywords.length} skills
+                        </span>
+                    )}
+                </div>
+            </div>
+
+            {uploadError && <p className="text-xs text-red-400 mb-6">{uploadError}</p>}
+
+            {resumeKeywords.length > 0 && (
+                <div className="flex flex-wrap items-center gap-2 mb-10 pb-4 border-b border-gray-800">
+                    <span className="text-xs text-gray-500 mr-2">Extracted Skills:</span>
+                    {resumeKeywords.map((k) => (
+                        <span key={k} className="text-xs rounded-full px-2 py-0.5 font-medium bg-indigo-900/30 text-indigo-400 border border-indigo-500/30">
+                            {k}
+                        </span>
+                    ))}
+                </div>
+            )}
+
+            {resumeKeywords.length === 0 && !uploadError && <div className="mb-10" />}
 
             {/* ── Loading ── */}
             {loading && (
                 <div className="flex flex-col items-center justify-center gap-3 py-24">
                     <div className="w-8 h-8 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
-                    <p className="text-gray-400 text-sm">Analysing {username}'s profile…</p>
+                    <p className="text-gray-400 text-sm">Analysing {username}'s profile {resumeKeywords.length ? "and resume " : ""}…</p>
                 </div>
             )}
 
