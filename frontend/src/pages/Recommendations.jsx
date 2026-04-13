@@ -387,7 +387,7 @@ export default function Recommendations() {
         formData.append("file", file);
 
         try {
-            const res = await axios.post(`${API}/upload-resume`, formData, {
+            const res = await axios.post(`${API}/recommendations/upload-resume`, formData, {
                 headers: { "Content-Type": "multipart/form-data" }
             });
             setResumeKeywords(res.data.keywords || []);
