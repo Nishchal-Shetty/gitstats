@@ -8,7 +8,7 @@ spec:
   rules:
     - http:
         paths:
-          - path: /api/*
+          - path: /api
             pathType: ImplementationSpecific
             backend:
               service:
@@ -16,7 +16,7 @@ spec:
                 port:
                   number: 80
 
-          - path: /*
+          - path: /
             pathType: ImplementationSpecific
             backend:
               service:
