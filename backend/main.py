@@ -1,3 +1,4 @@
+from __future__ import annotations
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -13,7 +14,11 @@ from sqlalchemy.orm import selectinload
 
 from classifier import classify_repository
 from database import Developer, Repository, RepoClassification, get_db, init_db
-from scraper import get_developer_stats, get_repository_details, scrape_and_store, strip_tz
+from scraper import (
+    GENRE_QUERIES,
+    get_developer_stats, get_repository_details, get_user_repos,
+    scrape_and_store, search_repositories, strip_tz,
+)
 
 load_dotenv()
 log = logging.getLogger(__name__)
@@ -357,82 +362,174 @@ async def search_repos(q: str = Query(..., min_length=2), db: AsyncSession = Dep
 @app.get("/recommendations/{username}")
 async def get_recommendations(username: str, db: AsyncSession = Depends(get_db)):
     """
-    Return up to 20 public repos the developer might want to contribute to,
-    based on their top languages and past repo genres.
+    Recommend public repos the developer might want to contribute to.
+
+    Strategy:
+      1. Fetch the user's own GitHub repos and classify up to 3 of them with
+         Claude to derive genres + tags that represent their expertise.
+      2. Build a priority-ordered list from the local DB (genre match → language
+         match → top-starred fallback).
+      3. Search the GitHub API live using genre-specific keywords derived from
+         the classification, so results aren't limited to the local DB.
+      4. Merge, deduplicate, and return with a `source` field ("db" | "github").
     """
-    # 1. Fetch developer info (top_languages; may hit GitHub if not cached)
-    try:
-        from scraper import get_developer_stats
-        dev_data = await get_developer_stats(username)
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Could not fetch developer profile: {exc}")
-
-    top_languages = dev_data.get("top_languages") or []
-
-    # 2. Find genres the user already works in (via their own repos in DB)
     own_prefix = f"{username}/%"
-    own_genre_result = await db.execute(
-        select(RepoClassification.genre)
-        .join(Repository, Repository.id == RepoClassification.repo_id)
-        .where(Repository.full_name.ilike(own_prefix))
-        .distinct()
-    )
-    user_genres = [row[0] for row in own_genre_result.all() if row[0] and row[0] != "unknown"]
 
-    # 3. Query repos NOT owned by this user
-    base_query = (
+    # ── 1. Fetch + classify user's own repos ─────────────────────────────────
+    try:
+        user_repos_raw = await get_user_repos(username)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Could not fetch {username}'s repos: {exc}")
+
+    # Derive top languages (fast, no API calls)
+    lang_counts: dict[str, int] = {}
+    for r in user_repos_raw:
+        if r.get("language"):
+            lang_counts[r["language"]] = lang_counts.get(r["language"], 0) + 1
+    top_languages = [lang for lang, _ in sorted(lang_counts.items(), key=lambda x: x[1], reverse=True)[:5]]
+
+    # Classify top 3 repos (by stars) with Claude → genres + tags
+    user_genres: list[str] = []
+    user_tags: list[str] = []
+    to_classify = sorted(user_repos_raw, key=lambda r: r.get("stars", 0), reverse=True)[:3]
+    for repo in to_classify:
+        try:
+            clf = await classify_repository(repo)
+            genre = clf.get("genre", "unknown")
+            if genre and genre != "unknown" and genre not in user_genres:
+                user_genres.append(genre)
+            for tag in clf.get("tags", []):
+                if tag not in user_tags:
+                    user_tags.append(tag)
+        except Exception as exc:
+            log.warning("Skipping classification for %s: %s", repo.get("full_name"), exc)
+
+    # Fall back to DB-stored genres for this user if Claude found nothing
+    if not user_genres:
+        db_genre_result = await db.execute(
+            select(RepoClassification.genre)
+            .join(Repository, Repository.id == RepoClassification.repo_id)
+            .where(Repository.full_name.ilike(own_prefix))
+            .distinct()
+        )
+        user_genres = [row[0] for row in db_genre_result.all() if row[0] and row[0] != "unknown"]
+
+    log.info("recommendations/%s: genres=%s  tags=%s  langs=%s",
+             username, user_genres, user_tags[:5], top_languages)
+
+    # Keep track of full_names we've already added (avoid duplicates)
+    seen: set[str] = {r["full_name"] for r in user_repos_raw}  # never recommend own repos
+
+    # ── 2. Query local DB ────────────────────────────────────────────────────
+    base_db_query = (
         select(Repository)
         .where(~Repository.full_name.ilike(own_prefix))
         .options(selectinload(Repository.classification))
         .order_by(Repository.stars.desc())
     )
 
-    recommended_repos = []
+    db_repos: list = []
 
-    # Priority 1: repos in the same genres
     if user_genres:
         genre_result = await db.execute(
-            base_query
+            base_db_query
             .join(RepoClassification, RepoClassification.repo_id == Repository.id)
             .where(RepoClassification.genre.in_(user_genres))
-            .limit(20)
+            .limit(15)
         )
-        recommended_repos = genre_result.scalars().all()
+        db_repos = list(genre_result.scalars().all())
 
-    # Priority 2: fallback — match by primary language
-    if len(recommended_repos) < 10 and top_languages:
+    if len(db_repos) < 8 and top_languages:
         lang_result = await db.execute(
-            base_query
-            .where(Repository.language.in_(top_languages))
-            .limit(20)
+            base_db_query.where(Repository.language.in_(top_languages)).limit(15)
         )
-        lang_repos = lang_result.scalars().all()
-        existing_ids = {r.id for r in recommended_repos}
-        for r in lang_repos:
-            if r.id not in existing_ids:
-                recommended_repos.append(r)
-                existing_ids.add(r.id)
-            if len(recommended_repos) >= 20:
+        for r in lang_result.scalars().all():
+            if r.id not in {x.id for x in db_repos}:
+                db_repos.append(r)
+            if len(db_repos) >= 15:
                 break
 
-    # Priority 3: fallback — top-starred repos in DB
-    if len(recommended_repos) < 5:
-        fallback_result = await db.execute(
-            base_query.limit(20)
-        )
-        fallback_repos = fallback_result.scalars().all()
-        existing_ids = {r.id for r in recommended_repos}
-        for r in fallback_repos:
-            if r.id not in existing_ids:
-                recommended_repos.append(r)
-            if len(recommended_repos) >= 20:
+    if len(db_repos) < 5:
+        fallback_result = await db.execute(base_db_query.limit(15))
+        for r in fallback_result.scalars().all():
+            if r.id not in {x.id for x in db_repos}:
+                db_repos.append(r)
+            if len(db_repos) >= 15:
                 break
+
+    db_recs = []
+    for r in db_repos[:15]:
+        d = _repo_dict(r, r.classification)
+        d["source"] = "db"
+        seen.add(r.full_name)
+        db_recs.append(d)
+
+    # ── 3. Live GitHub search ────────────────────────────────────────────────
+    # Build search queries: first from genres, then from user's own tags
+    search_queries: list[str] = []
+    for genre in user_genres[:2]:
+        qs = GENRE_QUERIES.get(genre, [])
+        if qs:
+            search_queries.append(qs[0])   # most representative query per genre
+
+    if user_tags:
+        # Build a combined tag query using the top 3 descriptive tags
+        tag_query = " ".join(user_tags[:3])
+        search_queries.append(tag_query)
+
+    if not search_queries and top_languages:
+        search_queries.append(top_languages[0])  # bare language fallback
+
+    github_recs: list[dict] = []
+    for query in search_queries[:3]:            # cap at 3 GitHub searches
+        try:
+            results = await search_repositories(query, min_stars=50, per_page=10)
+            for r in results:
+                if r["full_name"] in seen:
+                    continue
+                # Derive genre from whichever GENRE_QUERIES entry matched
+                derived_genre = next(
+                    (g for g, qs in GENRE_QUERIES.items() if query in qs), None
+                )
+                github_recs.append({
+                    "id": None,
+                    "github_id": r["github_id"],
+                    "full_name": r["full_name"],
+                    "description": r.get("description"),
+                    "language": r.get("language"),
+                    "stars": r.get("stars", 0),
+                    "forks": r.get("forks", 0),
+                    "watchers": r.get("watchers", 0),
+                    "open_issues": r.get("open_issues", 0),
+                    "topics": r.get("topics", []),
+                    "size": r.get("size", 0),
+                    "contributor_count": None,
+                    "commit_count": None,
+                    "created_at": r.get("created_at"),
+                    "updated_at": r.get("updated_at"),
+                    "scraped_at": None,
+                    "genre": derived_genre,
+                    "tags": [],
+                    "confidence": None,
+                    "source": "github",
+                })
+                seen.add(r["full_name"])
+                if len(github_recs) >= 10:
+                    break
+        except Exception as exc:
+            log.warning("GitHub live search failed for %r: %s", query, exc)
+        if len(github_recs) >= 10:
+            break
+
+    # ── 4. Merge DB + GitHub results ─────────────────────────────────────────
+    recommendations = db_recs + github_recs
 
     return {
         "username": username,
         "top_languages": top_languages,
         "user_genres": user_genres,
-        "recommendations": [_repo_dict(r, r.classification) for r in recommended_repos[:20]],
+        "user_tags": user_tags[:15],
+        "recommendations": recommendations,
     }
 
 
@@ -451,21 +548,27 @@ async def refine_recommendations(body: RecommendationsRefineRequest):
     repo_summaries = []
     for i, r in enumerate(body.repos):
         repo_summaries.append(
-            f"{i}: {r.get('full_name', '?')} | "
-            f"lang={r.get('language', '?')} | "
-            f"genre={r.get('genre', '?')} | "
-            f"stars={r.get('stars', 0)} | "
-            f"desc={str(r.get('description', ''))[:120]}"
+            "{}: {} | lang={} | genre={} | stars={} | desc={}".format(
+                i,
+                r.get("full_name", "?"),
+                r.get("language", "?"),
+                r.get("genre", "?"),
+                r.get("stars", 0),
+                str(r.get("description", ""))[:120],
+            )
         )
+    repo_list_str = "\n".join(repo_summaries)
 
-    prompt = f"""You are helping a GitHub developer named '{body.username}' find public repos to contribute to.
-
-The user says: "{body.prompt}"
-
-Below is a numbered list of candidate repositories (index: full_name | lang | genre | stars | description):
-{chr(10).join(repo_summaries)}
-
-Return ONLY valid JSON — a list of integer indices for the repos that best match the user's request, ordered by relevance (most relevant first). Include at most 10. Example: [3, 0, 7]"""
+    prompt = (
+        "You are helping a GitHub developer named '{}' find public repos to contribute to.\n\n"
+        "The user says: \"{}\"\n\n"
+        "Below is a numbered list of candidate repositories "
+        "(index: full_name | lang | genre | stars | description):\n"
+        "{}\n\n"
+        "Return ONLY valid JSON — a list of integer indices for the repos that best match "
+        "the user's request, ordered by relevance (most relevant first). "
+        "Include at most 10. Example: [3, 0, 7]"
+    ).format(body.username, body.prompt, repo_list_str)
 
     client = _anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
     try:
@@ -475,16 +578,15 @@ Return ONLY valid JSON — a list of integer indices for the repos that best mat
             messages=[{"role": "user", "content": prompt}],
         )
         raw = message.content[0].text.strip()
-        # Strip markdown if present
+        # Strip markdown code fences if present
         if raw.startswith("```"):
-            raw = "\n".join(l for l in raw.splitlines() if not l.startswith("```")).strip()
+            raw = "\n".join(line for line in raw.splitlines() if not line.startswith("```")).strip()
         indices = _json.loads(raw)
         if not isinstance(indices, list):
-            raise ValueError("Expected a list")
+            raise ValueError("Claude returned non-list: {}".format(raw))
         refined = [body.repos[i] for i in indices if isinstance(i, int) and 0 <= i < len(body.repos)]
+        log.info("refine_recommendations: Claude selected %d/%d repos", len(refined), len(body.repos))
+        return {"repos": refined, "warning": None}
     except Exception as exc:
-        log.error("refine_recommendations: Claude error: %s", exc)
-        # Graceful degradation: return original list
-        refined = body.repos
-
-    return {"repos": refined}
+        log.error("refine_recommendations: error: %s", exc)
+        return {"repos": body.repos, "warning": str(exc)}

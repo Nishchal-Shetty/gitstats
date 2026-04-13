@@ -1,3 +1,4 @@
+from __future__ import annotations
 import asyncio
 import base64
 import logging
@@ -22,8 +23,8 @@ def strip_tz(dt):
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 GITHUB_API = "https://api.github.com"
 
-# Keywords used when searching GitHub for each genre
-_GENRE_QUERIES: dict[str, list[str]] = {
+# Keywords used when searching GitHub for each genre (also used by recommendations)
+GENRE_QUERIES: dict[str, list[str]] = {
     "web_frontend":    ["react component library", "vue framework", "css design system", "frontend ui"],
     "web_backend":     ["rest api framework", "graphql server", "microservices backend", "authentication server"],
     "mobile":          ["react native app", "flutter mobile", "ios swift", "android kotlin"],
@@ -218,6 +219,35 @@ async def get_developer_stats(username: str) -> dict:
     }
 
 
+async def get_user_repos(username: str) -> list[dict]:
+    """
+    Return the user's own non-fork public repos with language, topics and stars.
+    Used by the recommendations engine to classify the user's areas of expertise.
+    """
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await _get(
+            client,
+            f"{GITHUB_API}/users/{username}/repos",
+            params={"per_page": 100, "sort": "stars", "type": "owner"},
+        )
+        resp.raise_for_status()
+        repos = resp.json()
+
+    return [
+        {
+            "full_name": r["full_name"],
+            "name": r["name"],
+            "description": r.get("description") or "",
+            "language": r.get("language"),
+            "topics": r.get("topics", []),
+            "stars": r.get("stargazers_count", 0),
+            "readme": "",  # List endpoint doesn't include README
+        }
+        for r in repos
+        if not r.get("fork", False)  # Ignore forks — classify original work only
+    ]
+
+
 async def fetch_github_user(token: str) -> dict:
     """Fetch the authenticated user's profile using their OAuth token."""
     async with httpx.AsyncClient(timeout=30) as client:
@@ -245,7 +275,7 @@ async def scrape_and_store(
 
     async with AsyncSessionLocal() as db:
         for genre in genres_to_scrape:
-            queries = _GENRE_QUERIES.get(genre, [genre])
+            queries = GENRE_QUERIES.get(genre, [genre])
             collected: dict[int, dict] = {}  # github_id → basic data, deduped
 
             log.info("[%s] Searching GitHub…", genre)
