@@ -16,6 +16,7 @@ from classifier import classify_repository
 from database import Developer, Repository, RepoClassification, get_db, init_db
 from scraper import (
     GENRE_QUERIES,
+    fetch_repo_issues,
     get_developer_stats, get_repository_details, get_user_repos,
     scrape_and_store, search_repositories, strip_tz,
 )
@@ -356,11 +357,125 @@ async def search_repos(q: str = Query(..., min_length=2), db: AsyncSession = Dep
 
 
 # ---------------------------------------------------------------------------
+# Background helper: persist live GitHub recs to the DB
+# ---------------------------------------------------------------------------
+
+async def _persist_live_repos(live_recs: list[dict]) -> None:
+    """
+    Background task: for each live GitHub repo not already in the DB,
+    insert a basic row immediately, then enrich with full details + classification.
+    """
+    from database import AsyncSessionLocal
+
+    for rec in live_recs:
+        github_id = rec.get("github_id")
+        full_name = rec.get("full_name", "")
+        if not github_id or not full_name:
+            continue
+        try:
+            async with AsyncSessionLocal() as db:
+                # 1. Skip if already in DB
+                existing = await db.execute(
+                    select(Repository).where(Repository.github_id == github_id)
+                )
+                if existing.scalar_one_or_none() is not None:
+                    log.debug("_persist_live_repos: %s already in DB, skipping", full_name)
+                    continue
+
+                # 2. Quick insert with search-result fields (no readme / contrib / commits yet)
+                repo = Repository(
+                    github_id=github_id,
+                    full_name=full_name,
+                    description=rec.get("description"),
+                    readme="",
+                    stars=rec.get("stars", 0),
+                    forks=rec.get("forks", 0),
+                    watchers=rec.get("watchers", 0),
+                    open_issues=rec.get("open_issues", 0),
+                    language=rec.get("language"),
+                    topics=rec.get("topics", []),
+                    size=rec.get("size", 0),
+                    contributor_count=0,
+                    commit_count=0,
+                    created_at=strip_tz(datetime.fromisoformat(
+                        rec["created_at"].replace("Z", "+00:00")
+                    )) if rec.get("created_at") else datetime.utcnow(),
+                    updated_at=strip_tz(datetime.fromisoformat(
+                        rec["updated_at"].replace("Z", "+00:00")
+                    )) if rec.get("updated_at") else datetime.utcnow(),
+                )
+                db.add(repo)
+                await db.commit()
+                await db.refresh(repo)
+                log.info("_persist_live_repos: inserted %s (id=%s)", full_name, repo.id)
+
+            # 3. Enrich: fetch full details (readme, contributor_count, commit_count)
+            try:
+                details = await get_repository_details(full_name)
+                async with AsyncSessionLocal() as db:
+                    result = await db.execute(
+                        select(Repository).where(Repository.github_id == github_id)
+                    )
+                    repo = result.scalar_one_or_none()
+                    if repo:
+                        repo.readme          = details.get("readme", "")
+                        repo.contributor_count = details.get("contributor_count", 0)
+                        repo.commit_count    = details.get("commit_count", 0)
+                        repo.stars           = details.get("stars", repo.stars)
+                        repo.forks           = details.get("forks", repo.forks)
+                        repo.open_issues     = details.get("open_issues", repo.open_issues)
+                        await db.commit()
+                        log.info("_persist_live_repos: enriched %s", full_name)
+            except Exception as exc:
+                log.warning("_persist_live_repos: enrich failed for %s: %s", full_name, exc)
+
+            # 4. Classify with Claude (best-effort — skip if no credits)
+            try:
+                clf_data = {
+                    "full_name": full_name,
+                    "description": rec.get("description") or "",
+                    "language": rec.get("language") or "",
+                    "topics": rec.get("topics", []),
+                    "readme": "",
+                }
+                clf = await classify_repository(clf_data)
+                async with AsyncSessionLocal() as db:
+                    result = await db.execute(
+                        select(Repository).where(Repository.github_id == github_id)
+                    )
+                    repo = result.scalar_one_or_none()
+                    if repo and clf.get("genre") and clf["genre"] != "unknown":
+                        existing_clf = await db.execute(
+                            select(RepoClassification).where(
+                                RepoClassification.repo_id == repo.id
+                            )
+                        )
+                        if existing_clf.scalar_one_or_none() is None:
+                            db.add(RepoClassification(
+                                repo_id=repo.id,
+                                genre=clf["genre"],
+                                tags=clf.get("tags", []),
+                                confidence=clf.get("confidence"),
+                            ))
+                            await db.commit()
+                            log.info("_persist_live_repos: classified %s → %s", full_name, clf["genre"])
+            except Exception as exc:
+                log.warning("_persist_live_repos: classify failed for %s: %s", full_name, exc)
+
+        except Exception as exc:
+            log.error("_persist_live_repos: unexpected error for %s: %s", full_name, exc)
+
+
+# ---------------------------------------------------------------------------
 # Recommendations endpoints
 # ---------------------------------------------------------------------------
 
 @app.get("/recommendations/{username}")
-async def get_recommendations(username: str, db: AsyncSession = Depends(get_db)):
+async def get_recommendations(
+    username: str,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+):
     """
     Recommend public repos the developer might want to contribute to.
 
@@ -521,8 +636,12 @@ async def get_recommendations(username: str, db: AsyncSession = Depends(get_db))
         if len(github_recs) >= 10:
             break
 
-    # ── 4. Merge DB + GitHub results ─────────────────────────────────────────
+    # ── 4. Merge DB + GitHub results + schedule background persistence ────────
     recommendations = db_recs + github_recs
+
+    if github_recs:
+        background_tasks.add_task(_persist_live_repos, github_recs)
+        log.info("Scheduled background persistence for %d live repos", len(github_recs))
 
     return {
         "username": username,
@@ -590,3 +709,90 @@ async def refine_recommendations(body: RecommendationsRefineRequest):
     except Exception as exc:
         log.error("refine_recommendations: error: %s", exc)
         return {"repos": body.repos, "warning": str(exc)}
+
+
+@app.get("/recommendations/issues/{owner}/{repo}")
+async def get_repo_issues_for_user(
+    owner: str,
+    repo: str,
+    username: str = Query(default=""),
+    genres: str = Query(default=""),
+    tags: str = Query(default=""),
+):
+    """
+    Fetch 3 open GitHub issues from `owner/repo` that are most suitable
+    for the given user to work on, based on their genres and tags.
+    Claude selects the best 3; falls back to top-3 labelled issues on error.
+    """
+    import json as _json
+    import anthropic as _anthropic
+
+    full_name = "{}/{}".format(owner, repo)
+
+    try:
+        issues = await fetch_repo_issues(owner, repo, per_page=20)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="Could not fetch issues for {}: {}".format(full_name, exc))
+
+    if not issues:
+        return {"issues": [], "full_name": full_name}
+    if len(issues) <= 3:
+        return {"issues": issues, "full_name": full_name}
+
+    # Build a summary list for Claude
+    user_genres_list = [g.strip() for g in genres.split(",") if g.strip()]
+    user_tags_list   = [t.strip() for t in tags.split(",") if t.strip()]
+
+    issue_lines = []
+    for i, iss in enumerate(issues):
+        label_str = ", ".join(iss["labels"]) or "none"
+        issue_lines.append(
+            "{}: #{} | {} | labels=[{}] | comments={} | excerpt: {}".format(
+                i, iss["number"], iss["title"], label_str,
+                iss["comments"], iss["body_excerpt"][:120],
+            )
+        )
+    issue_list_str = "\n".join(issue_lines)
+
+    prompt = (
+        "You are helping a developer find GitHub issues to contribute to in the repo '{}'.\n\n"
+        "The developer skills: genres=[{}], tags=[{}], username={}.\n\n"
+        "Below are open issues (index: #number | title | labels | comments | excerpt):\n"
+        "{}\n\n"
+        "Choose exactly 3 indices (integers) that are the MOST suitable for this developer "
+        "given their skills - prefer labelled issues, achievable scope, and relevance.\n"
+        "Return ONLY a valid JSON list of 3 integers. Example: [2, 0, 5]"
+    ).format(
+        full_name,
+        ", ".join(user_genres_list) or "unknown",
+        ", ".join(user_tags_list) or "unknown",
+        username or "unknown",
+        issue_list_str,
+    )
+
+    client = _anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+    try:
+        message = await client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=64,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = message.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = "\n".join(ln for ln in raw.splitlines() if not ln.startswith("```")).strip()
+        indices = _json.loads(raw)
+        if not isinstance(indices, list) or len(indices) == 0:
+            raise ValueError("unexpected response: {}".format(raw))
+        selected = [issues[i] for i in indices[:3] if isinstance(i, int) and 0 <= i < len(issues)]
+        seen_nums = {s["number"] for s in selected}
+        for iss in issues:
+            if len(selected) >= 3:
+                break
+            if iss["number"] not in seen_nums:
+                selected.append(iss)
+        log.info("get_repo_issues: picked %s for %s", [s["number"] for s in selected], full_name)
+    except Exception as exc:
+        log.warning("get_repo_issues: Claude failed (%s), using top-3", exc)
+        selected = issues[:3]
+
+    return {"issues": selected, "full_name": full_name}
