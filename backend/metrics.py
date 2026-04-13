@@ -91,13 +91,15 @@ repo_compare_requests_total = Counter(
 )
 
 _REPO_COMPARE_ROUTE: Final = "/stats/repo/{owner}/{repo}"
+# Avoid raw URL paths on 404s (favicon, bots, typos) — unbounded Prometheus label cardinality.
+_UNMATCHED_ROUTE: Final = "_unmatched"
 
 
 def _route_template(request: Request) -> str:
     route = request.scope.get("route")
     if route is not None and getattr(route, "path", None):
         return route.path
-    return request.url.path
+    return _UNMATCHED_ROUTE
 
 
 def _record_repo_compare(status_code: int) -> None:
