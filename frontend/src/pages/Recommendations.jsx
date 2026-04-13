@@ -33,60 +33,258 @@ function GenreBadge({ genre }) {
     );
 }
 
-function RepoCard({ repo }) {
-    const [owner, name] = (repo.full_name ?? "").split("/");
-    const isLive = repo.source === "github";
+const LABEL_COLORS = {
+    "good first issue": { bg: "#0d2b1a", fg: "#3fb950", border: "#238636" },
+    "help wanted": { bg: "#0d2239", fg: "#388bfd", border: "#1f6feb" },
+    "bug": { bg: "#2d0808", fg: "#ff7b72", border: "#da3633" },
+    "enhancement": { bg: "#0d1f3c", fg: "#79c0ff", border: "#1158c7" },
+    "documentation": { bg: "#1c1006", fg: "#e3b341", border: "#9e6a03" },
+};
+function LabelChip({ name }) {
+    const style = LABEL_COLORS[name.toLowerCase()] ?? { bg: "#161b22", fg: "#8b949e", border: "#30363d" };
     return (
-        <Link
-            to={`/repo/${owner}/${name}`}
-            className="block rounded-xl border border-gray-700 p-4 hover:border-indigo-500 transition-all duration-150 group"
-            style={{ backgroundColor: "#161b22" }}
-        >
-            {/* Header row */}
-            <div className="flex items-start justify-between gap-2 mb-2">
-                <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2 mb-0.5">
-                        <p className="text-xs text-gray-500 truncate">{owner}</p>
-                        {isLive && (
-                            <span
-                                className="text-xs rounded-full px-1.5 py-0 font-semibold shrink-0"
-                                style={{ backgroundColor: "#0d2b1a", color: "#3fb950", border: "1px solid #2ea04326" }}
-                            >
-                                ● Live
-                            </span>
-                        )}
-                    </div>
-                    <p className="text-sm font-semibold text-white truncate group-hover:text-indigo-300 transition">
-                        {name}
-                    </p>
-                </div>
-                <span className="text-xs text-yellow-400 shrink-0 mt-1">
-                    ★ {repo.stars?.toLocaleString() ?? "—"}
-                </span>
-            </div>
-
-            {/* Description */}
-            {repo.description && (
-                <p className="text-xs text-gray-400 line-clamp-2 mb-3 leading-relaxed">
-                    {repo.description}
-                </p>
-            )}
-
-            {/* Footer pills */}
-            <div className="flex flex-wrap items-center gap-2">
-                {repo.language && (
-                    <span className="text-xs text-gray-500 border border-gray-700 rounded px-2 py-0.5">
-                        {repo.language}
-                    </span>
-                )}
-                <GenreBadge genre={repo.genre} />
-                {repo.forks != null && (
-                    <span className="text-xs text-gray-600 ml-auto">⑂ {repo.forks.toLocaleString()}</span>
-                )}
-            </div>
-        </Link>
+        <span className="text-xs rounded-full px-2 py-0.5 font-medium"
+            style={{ backgroundColor: style.bg, color: style.fg, border: `1px solid ${style.border}` }}>
+            {name}
+        </span>
     );
 }
+
+function StatRow({ icon, label, value }) {
+    if (value == null || value === 0) return null;
+    return (
+        <div className="flex items-center justify-between gap-4 py-1.5 border-b border-gray-800 last:border-0">
+            <span className="text-xs text-gray-500">{icon} {label}</span>
+            <span className="text-xs font-semibold text-white tabular-nums">
+                {typeof value === "number" ? value.toLocaleString() : value}
+            </span>
+        </div>
+    );
+}
+
+function IssueCard({ issue }) {
+    return (
+        <a
+            href={issue.html_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            className="flex flex-col gap-2 rounded-lg p-3 h-full hover:border-indigo-500 transition-colors group/issue min-w-0"
+            style={{ backgroundColor: "#0d1117", border: "1px solid #21262d" }}
+        >
+            <div className="flex items-start justify-between gap-2">
+                <span className="text-xs font-semibold text-white group-hover/issue:text-indigo-300 transition leading-snug flex-1 min-w-0 break-words">
+                    #{issue.number} · {issue.title}
+                </span>
+                {issue.comments > 0 && (
+                    <span className="text-xs text-gray-600 shrink-0 mt-0.5">💬 {issue.comments}</span>
+                )}
+            </div>
+            {issue.body_excerpt && (
+                <p className="text-xs text-gray-500 line-clamp-3 leading-relaxed flex-1 break-words">{issue.body_excerpt}</p>
+            )}
+            <div className="flex flex-wrap gap-1 mt-auto pt-1">
+                {issue.labels.map((l) => <LabelChip key={l} name={l} />)}
+            </div>
+        </a>
+    );
+}
+
+function RepoCard({ repo, username, userGenres, userTags }) {
+    const [owner, name] = (repo.full_name ?? "").split("/");
+    const isLive = repo.source === "github";
+    const [expanded, setExpanded] = useState(false);
+    const [issues, setIssues] = useState(null);
+    const [issueLoading, setIssueLoading] = useState(false);
+    const [issueError, setIssueError] = useState(null);
+
+    const handleClick = async () => {
+        setExpanded((prev) => !prev);
+        if (issues !== null || issueLoading) return;
+        setIssueLoading(true);
+        setIssueError(null);
+        try {
+            const params = new URLSearchParams({
+                username: username || "",
+                genres: (userGenres ?? []).join(","),
+                tags: (userTags ?? []).join(","),
+            });
+            const res = await axios.get(
+                `${API}/recommendations/issues/${owner}/${name}?${params}`
+            );
+            setIssues(res.data.issues);
+        } catch (err) {
+            setIssueError(err.response?.data?.detail || "Could not load issues.");
+        } finally {
+            setIssueLoading(false);
+        }
+    };
+
+    // Compact card (collapsed)
+    if (!expanded) {
+        return (
+            <div
+                onClick={handleClick}
+                className="rounded-xl border cursor-pointer transition-all duration-200 hover:border-gray-500 p-4"
+                style={{ backgroundColor: "#161b22", borderColor: "#30363d" }}
+            >
+                <div className="flex items-start justify-between gap-2 mb-2">
+                    <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2 mb-0.5">
+                            <p className="text-xs text-gray-500 truncate">{owner}</p>
+                            {isLive && (
+                                <span className="text-xs rounded-full px-1.5 font-semibold shrink-0"
+                                    style={{ backgroundColor: "#0d2b1a", color: "#3fb950", border: "1px solid #238636" }}>
+                                    ● Live
+                                </span>
+                            )}
+                        </div>
+                        <p className="text-sm font-semibold text-white truncate">{name}</p>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                        <span className="text-xs text-yellow-400">★ {repo.stars?.toLocaleString() ?? "—"}</span>
+                        <span className="text-gray-600 text-xs">▾</span>
+                    </div>
+                </div>
+                {repo.description && (
+                    <p className="text-xs text-gray-400 line-clamp-2 mb-3 leading-relaxed">{repo.description}</p>
+                )}
+                <div className="flex flex-wrap items-center gap-2">
+                    {repo.language && (
+                        <span className="text-xs text-gray-500 border border-gray-700 rounded px-2 py-0.5">{repo.language}</span>
+                    )}
+                    <GenreBadge genre={repo.genre} />
+                    {repo.forks != null && (
+                        <span className="text-xs text-gray-600 ml-auto">⑂ {repo.forks?.toLocaleString()}</span>
+                    )}
+                </div>
+            </div>
+        );
+    }
+
+    // Full-width expanded card
+    return (
+        <div
+            onClick={handleClick}
+            className="rounded-xl border cursor-pointer transition-all duration-200"
+            style={{
+                backgroundColor: "#161b22",
+                borderColor: "#58a6ff",
+                boxShadow: "0 0 0 1px #1f6feb33",
+                gridColumn: "1 / -1",   // span full grid row
+            }}
+        >
+            {/* ── Top section: info left + stats right ── */}
+            <div
+                className="grid gap-0"
+                style={{ gridTemplateColumns: "1fr 260px" }}
+                onClick={(e) => e.stopPropagation()}
+            >
+                {/* Left: repo identity + description + pills */}
+                <div className="p-5 border-r border-gray-800">
+                    <div className="flex items-start justify-between gap-2 mb-3">
+                        <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2 mb-1">
+                                <span className="text-xs text-gray-500">{owner} /</span>
+                                <span className="text-base font-bold text-white">{name}</span>
+                                {isLive && (
+                                    <span className="text-xs rounded-full px-2 py-0.5 font-semibold"
+                                        style={{ backgroundColor: "#0d2b1a", color: "#3fb950", border: "1px solid #238636" }}>
+                                        ● Live
+                                    </span>
+                                )}
+                            </div>
+                            {repo.description && (
+                                <p className="text-sm text-gray-300 leading-relaxed">{repo.description}</p>
+                            )}
+                        </div>
+                        {/* Collapse button */}
+                        <button
+                            onClick={handleClick}
+                            className="shrink-0 text-xs text-gray-500 hover:text-white transition px-2 py-1 rounded border border-gray-700 hover:border-gray-500"
+                        >
+                            ▴ Collapse
+                        </button>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2 mt-4">
+                        {repo.language && (
+                            <span className="text-xs text-gray-400 border border-gray-700 rounded px-2 py-0.5">{repo.language}</span>
+                        )}
+                        <GenreBadge genre={repo.genre} />
+                        {(repo.topics ?? []).slice(0, 5).map((t) => (
+                            <span key={t} className="text-xs rounded px-2 py-0.5"
+                                style={{ backgroundColor: "#0d2239", color: "#79c0ff", border: "1px solid #1158c722" }}>
+                                {t}
+                            </span>
+                        ))}
+                    </div>
+
+                    <div className="mt-4">
+                        <a
+                            href={`https://github.com/${owner}/${name}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            className="inline-flex items-center gap-1.5 text-xs text-indigo-400 hover:underline"
+                        >
+                            <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z" /></svg>
+                            View on GitHub ↗
+                        </a>
+                    </div>
+                </div>
+
+                {/* Right: stats panel */}
+                <div className="p-5">
+                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Repo Stats</p>
+                    <StatRow icon="★" label="Stars" value={repo.stars} />
+                    <StatRow icon="⑂" label="Forks" value={repo.forks} />
+                    <StatRow icon="👁" label="Watchers" value={repo.watchers} />
+                    <StatRow icon="🐛" label="Open Issues" value={repo.open_issues} />
+                    <StatRow icon="👥" label="Contributors" value={repo.contributor_count} />
+                    <StatRow icon="📝" label="Commits" value={repo.commit_count} />
+                    {repo.size > 0 && (
+                        <StatRow icon="📦" label="Size"
+                            value={repo.size > 1024 ? `${(repo.size / 1024).toFixed(1)} MB` : `${repo.size} KB`} />
+                    )}
+                    {repo.updated_at && (
+                        <StatRow icon="🕐" label="Updated"
+                            value={new Date(repo.updated_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })} />
+                    )}
+                </div>
+            </div>
+
+            {/* ── Bottom: 3 issues in a horizontal row ── */}
+            <div
+                className="border-t border-gray-800 px-5 pb-5 pt-4"
+                onClick={(e) => e.stopPropagation()}
+            >
+                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">
+                    Suggested issues for you
+                </p>
+
+                {issueLoading && (
+                    <div className="flex items-center gap-2 py-6 justify-center text-xs text-gray-500">
+                        <span className="w-4 h-4 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+                        Finding the best issues for your skills…
+                    </div>
+                )}
+                {issueError && !issueLoading && (
+                    <p className="text-xs text-red-400 py-2">{issueError}</p>
+                )}
+                {issues && !issueLoading && issues.length === 0 && (
+                    <p className="text-xs text-gray-500 py-2">No open issues found for this repo.</p>
+                )}
+                {issues && !issueLoading && issues.length > 0 && (
+                    <div className="grid gap-3" style={{ gridTemplateColumns: `repeat(${issues.length}, 1fr)` }}>
+                        {issues.map((iss) => <IssueCard key={iss.number} issue={iss} />)}
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+}
+
 
 // ─── Refine box ─────────────────────────────────────────────────────────────
 
@@ -310,7 +508,13 @@ export default function Recommendations() {
                     ) : (
                         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                             {displayedRepos.map((repo) => (
-                                <RepoCard key={repo.full_name} repo={repo} />
+                                <RepoCard
+                                    key={repo.full_name}
+                                    repo={repo}
+                                    username={data.username}
+                                    userGenres={data.user_genres}
+                                    userTags={data.user_tags}
+                                />
                             ))}
                         </div>
                     )}
