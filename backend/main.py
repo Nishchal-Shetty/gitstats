@@ -5,12 +5,15 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 
 from dotenv import load_dotenv
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+import tempfile
+from pdfminer.high_level import extract_text
+import anthropic
 
 from classifier import classify_repository
 from auth import create_access_token, exchange_code_for_token, get_current_user
@@ -481,6 +484,7 @@ async def _persist_live_repos(live_recs: list[dict]) -> None:
 async def get_recommendations(
     username: str,
     background_tasks: BackgroundTasks,
+    resume_keywords: str = Query(default=""),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -598,6 +602,10 @@ async def get_recommendations(
         # Build a combined tag query using the top 3 descriptive tags
         tag_query = " ".join(user_tags[:3])
         search_queries.append(tag_query)
+        
+    if resume_keywords:
+        # Heavily weigh the user's resume keywords
+        search_queries.append(f"{resume_keywords} {top_languages[0] if top_languages else ''}".strip())
 
     if not search_queries and top_languages:
         search_queries.append(top_languages[0])  # bare language fallback
@@ -744,7 +752,7 @@ async def get_repo_issues_for_user(
     if not issues:
         return {"issues": [], "full_name": full_name}
     if len(issues) <= 3:
-        return {"issues": issues, "full_name": full_name}
+        return {"issues": issues[:3], "full_name": f"{owner}/{repo}"}
 
     # Build a summary list for Claude
     user_genres_list = [g.strip() for g in genres.split(",") if g.strip()]
@@ -803,3 +811,54 @@ async def get_repo_issues_for_user(
         selected = issues[:3]
 
     return {"issues": selected, "full_name": full_name}
+
+
+@app.post("/upload-resume")
+async def upload_resume(file: UploadFile = File(...)):
+    """
+    Accepts a PDF resume, parses its text, and asks Claude to extract the top technical keywords.
+    """
+    if not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF resumes are supported.")
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+        try:
+            content = await file.read()
+            tmp.write(content)
+            tmp_path = tmp.name
+        except Exception as e:
+            raise HTTPException(status_code=500, detail="Failed to save uploaded file.")
+
+    try:
+        text = extract_text(tmp_path)
+    except Exception as e:
+        log.error("Failed to parse PDF resume: %s", e)
+        raise HTTPException(status_code=400, detail="Failed to parse PDF content.")
+    finally:
+        os.remove(tmp_path)
+
+    text = text.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="No readable text found in PDF.")
+
+    client = anthropic.AsyncAnthropic(api_key=os.environ.get("ANTHROPIC_API_KEY", ""))
+    prompt = (
+        "Extract the top 5-10 core technical keywords, frameworks, skills, and programming "
+        "languages from the following resume text. Output ONLY a comma-separated list of "
+        "keywords, nothing else. Do not include soft skills.\n\n"
+        f"Resume:\n{text[:8000]}"
+    )
+    
+    try:
+        resp = await client.messages.create(
+            model="claude-3-haiku-20240307",
+            max_tokens=60,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        content_text = resp.content[0].text.strip()
+        # Clean up output
+        keywords = [k.strip() for k in content_text.split(",") if k.strip()]
+        return {"keywords": keywords}
+    except Exception as e:
+        log.error("Claude keyword extraction failed: %s", e)
+        return {"keywords": []}
