@@ -35,6 +35,7 @@ function GenreBadge({ genre }) {
 
 function RepoCard({ repo }) {
     const [owner, name] = (repo.full_name ?? "").split("/");
+    const isLive = repo.source === "github";
     return (
         <Link
             to={`/repo/${owner}/${name}`}
@@ -43,8 +44,18 @@ function RepoCard({ repo }) {
         >
             {/* Header row */}
             <div className="flex items-start justify-between gap-2 mb-2">
-                <div className="min-w-0">
-                    <p className="text-xs text-gray-500 truncate">{owner}</p>
+                <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 mb-0.5">
+                        <p className="text-xs text-gray-500 truncate">{owner}</p>
+                        {isLive && (
+                            <span
+                                className="text-xs rounded-full px-1.5 py-0 font-semibold shrink-0"
+                                style={{ backgroundColor: "#0d2b1a", color: "#3fb950", border: "1px solid #2ea04326" }}
+                            >
+                                ● Live
+                            </span>
+                        )}
+                    </div>
                     <p className="text-sm font-semibold text-white truncate group-hover:text-indigo-300 transition">
                         {name}
                     </p>
@@ -95,6 +106,9 @@ function RefineBox({ username, repos, onRefined }) {
                 repos,
             });
             onRefined(res.data.repos);
+            if (res.data.warning) {
+                setError("⚠️ AI refinement unavailable — showing original list. (" + res.data.warning.split(".")[0] + ")");
+            }
         } catch (err) {
             setError(err.response?.data?.detail || "Refinement failed. Please try again.");
         } finally {
@@ -261,6 +275,21 @@ export default function Recommendations() {
                                 <span className="text-xs text-gray-600">genres:</span>
                                 {data.user_genres.map((g) => (
                                     <GenreBadge key={g} genre={g} />
+                                ))}
+                            </div>
+                        )}
+
+                        {data.user_tags?.length > 0 && (
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                                <span className="text-xs text-gray-600">tags:</span>
+                                {data.user_tags.slice(0, 6).map((t) => (
+                                    <span
+                                        key={t}
+                                        className="text-xs rounded px-2 py-0.5"
+                                        style={{ backgroundColor: "#21262d", color: "#8b949e", border: "1px solid #30363d" }}
+                                    >
+                                        {t}
+                                    </span>
                                 ))}
                             </div>
                         )}
