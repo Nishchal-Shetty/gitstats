@@ -118,7 +118,7 @@ async def _fetch_classify_store(full_name: str, db: AsyncSession) -> tuple[Repos
 # Endpoints
 # ---------------------------------------------------------------------------
 
-@app.get("/api/health")
+@app.get("/health")
 async def health():
     return {"status": "ok"}
 
