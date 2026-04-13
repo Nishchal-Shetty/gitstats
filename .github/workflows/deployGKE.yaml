@@ -121,6 +121,9 @@ jobs:
         context: ./frontend
         file: ./frontend/Dockerfile
         push: true
+        build-args: |
+          VITE_API_URL=${{ secrets.VITE_API_URL }}
+          VITE_GITHUB_CLIENT_ID=${{ secrets.GIT_CLIENT_ID }}
         tags: ${{ steps.meta-frontend.outputs.tags }}
 
     # Deploy to GKE
