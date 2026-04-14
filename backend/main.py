@@ -12,8 +12,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from classifier import classify_repository
-from database import Developer, Repository, RepoClassification, get_db, init_db
-from scraper import get_developer_stats, get_repository_details, scrape_and_store, strip_tz
+from auth import create_access_token, exchange_code_for_token, get_current_user
+from database import Developer, Repository, RepoClassification, User, get_db, init_db
+from scraper import fetch_github_user, get_developer_stats, get_repository_details, scrape_and_store, strip_tz
 
 load_dotenv()
 log = logging.getLogger(__name__)
