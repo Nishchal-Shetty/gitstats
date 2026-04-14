@@ -33,4 +33,4 @@ spec:
               valueFrom:
                 secretKeyRef:
                   name: backend-secrets
-                  key: GIT_CLIENT_ID
+                  key: GITHUB_CLIENT_ID
