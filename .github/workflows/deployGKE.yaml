@@ -132,9 +132,9 @@ jobs:
         kubectl create secret generic backend-secrets \
           --from-literal=SUPABASE_URL=${{ secrets.SUPABASE_URL }} \
           --from-literal=SECRET_KEY=${{ secrets.SECRET_KEY }} \
-          --from-literal=GIT_TOKEN=${{ secrets.GIT_TOKEN }} \
-          --from-literal=GIT_CLIENT_ID=${{ secrets.GIT_CLIENT_ID }} \
-          --from-literal=GIT_CLIENT_SECRET=${{ secrets.GIT_CLIENT_SECRET }} \
+          --from-literal=GITHUB_TOKEN=${{ secrets.GIT_TOKEN }} \
+          --from-literal=GITHUB_CLIENT_ID=${{ secrets.GIT_CLIENT_ID }} \
+          --from-literal=GITHUB_CLIENT_SECRET=${{ secrets.GIT_CLIENT_SECRET }} \
           --from-literal=ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }} \
           --dry-run=client -o yaml | kubectl apply -f -
 
