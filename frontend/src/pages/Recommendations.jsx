@@ -110,7 +110,7 @@ function RepoCard({ repo, username, userGenres, userTags }) {
                 tags: (userTags ?? []).join(","),
             });
             const res = await axios.get(
-                `${API}/recommendations/issues/${owner}/${name}?${params}`
+                `${API}/api/recommendations/issues/${owner}/${name}?${params}`
             );
             setIssues(res.data.issues);
         } catch (err) {
@@ -298,7 +298,7 @@ function RefineBox({ username, repos, onRefined }) {
         setRefining(true);
         setError(null);
         try {
-            const res = await axios.post(`${API}/recommendations/refine`, {
+            const res = await axios.post(`${API}/api/recommendations/refine`, {
                 username,
                 prompt: prompt.trim(),
                 repos,
@@ -387,7 +387,7 @@ export default function Recommendations() {
         formData.append("file", file);
 
         try {
-            const res = await axios.post(`${API}/recommendations/upload-resume`, formData, {
+            const res = await axios.post(`${API}/api/recommendations/upload-resume`, formData, {
                 headers: { "Content-Type": "multipart/form-data" }
             });
             setResumeKeywords(res.data.keywords || []);
@@ -415,7 +415,7 @@ export default function Recommendations() {
             if (resumeKeywords.length > 0) {
                 params.append("resume_keywords", resumeKeywords.join(" "));
             }
-            const res = await axios.get(`${API}/recommendations/${u}?${params.toString()}`);
+            const res = await axios.get(`${API}/api/recommendations/${u}?${params.toString()}`);
             setData(res.data);
             setDisplayed(res.data.recommendations ?? []);
         } catch (err) {

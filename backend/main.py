@@ -44,7 +44,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(recommendations_router, prefix="/recommendations", tags=["Recommendations"])
+app.include_router(recommendations_router, prefix="/api/recommendations", tags=["Recommendations"])
 
 
 # ---------------------------------------------------------------------------
