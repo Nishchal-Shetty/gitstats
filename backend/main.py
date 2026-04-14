@@ -137,13 +137,13 @@ async def health():
     return {"status": "ok"}
 
 
-@app.post("/scrape/start")
+@app.post("/api/scrape/start")
 async def scrape_start(body: ScrapeRequest, background_tasks: BackgroundTasks):
     background_tasks.add_task(scrape_and_store, body.genres, body.repos_per_genre)
     return {"message": "scrape started", "genres": body.genres}
 
 
-@app.get("/stats/repo/{owner}/{repo}")
+@app.get("/api/stats/repo/{owner}/{repo}")
 async def stats_repo(owner: str, repo: str, db: AsyncSession = Depends(get_db)):
     full_name = f"{owner}/{repo}"
 
@@ -211,7 +211,7 @@ async def stats_repo(owner: str, repo: str, db: AsyncSession = Depends(get_db)):
     return {**_repo_dict(repo_row, clf), "genre_comparison": genre_stats}
 
 
-@app.get("/stats/developer/{username}")
+@app.get("/api/stats/developer/{username}")
 async def stats_developer(username: str, db: AsyncSession = Depends(get_db)):
     # Check DB cache
     result = await db.execute(
@@ -263,7 +263,7 @@ async def stats_developer(username: str, db: AsyncSession = Depends(get_db)):
     }
 
 
-@app.get("/repos/similar/{owner}/{repo}")
+@app.get("/api/repos/similar/{owner}/{repo}")
 async def similar_repos(owner: str, repo: str, db: AsyncSession = Depends(get_db)):
     full_name = f"{owner}/{repo}"
 
@@ -304,7 +304,7 @@ async def similar_repos(owner: str, repo: str, db: AsyncSession = Depends(get_db
     return [_repo_dict(r, r.classification) for r in similar]
 
 
-@app.post("/admin/reclassify")
+@app.post("/api/admin/reclassify")
 async def admin_reclassify(db: AsyncSession = Depends(get_db)):
     """Re-classify all repos in the DB that have genre=null or genre='unknown'."""
     result = await db.execute(
@@ -347,7 +347,7 @@ async def admin_reclassify(db: AsyncSession = Depends(get_db)):
     return {"reclassified": count}
 
 
-@app.get("/repos/search")
+@app.get("/api/repos/search")
 async def search_repos(q: str = Query(..., min_length=2), db: AsyncSession = Depends(get_db)):
     pattern = f"%{q}%"
     result = await db.execute(
