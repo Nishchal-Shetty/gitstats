@@ -87,7 +87,7 @@ SECRET_KEY=
 
 **frontend/.env**
 ```
-VITE_API_URL=http://localhost:8000
+VITE_API_URL=
 VITE_GITHUB_CLIENT_ID=
 ```
 
@@ -102,12 +102,12 @@ VITE_GITHUB_CLIENT_ID=
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `POST` | `/scrape/start` | Start scraping GitHub for repos by genre |
-| `GET`  | `/stats/repo/{owner}/{repo}` | Get stats + classification + genre comparison for a repo |
-| `GET`  | `/stats/developer/{username}` | Get developer profile and top repos |
-| `GET`  | `/repos/similar/{owner}/{repo}` | Find similar repos by genre |
-| `GET`  | `/repos/search?q=query` | Search repos in the database |
-| `POST` | `/admin/reclassify` | Reclassify repos with missing genre data |
+| `POST` | `/api/scrape/start` | Start scraping GitHub for repos by genre |
+| `GET`  | `/api/stats/repo/{owner}/{repo}` | Get stats + classification + genre comparison for a repo |
+| `GET`  | `/api/stats/developer/{username}` | Get developer profile and top repos |
+| `GET`  | `/api/repos/similar/{owner}/{repo}` | Find similar repos by genre |
+| `GET`  | `/api/repos/search?q=query` | Search repos in the database |
+| `POST` | `/api/admin/reclassify` | Reclassify repos with missing genre data |
 | `GET`  | `/health` | Health check |
 
 ## Project Structure

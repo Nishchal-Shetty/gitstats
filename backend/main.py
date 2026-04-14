@@ -124,101 +124,13 @@ async def health():
     return {"status": "ok"}
 
 
-# ---------------------------------------------------------------------------
-# Auth endpoints
-# ---------------------------------------------------------------------------
-
-class GitHubAuthRequest(BaseModel):
-    code: str
-
-
-@app.post("/auth/github")
-async def auth_github(body: GitHubAuthRequest, db: AsyncSession = Depends(get_db)):
-    """Exchange GitHub OAuth code for a JWT. Creates user if new, updates last_login if existing."""
-    # 1. Exchange code for GitHub access token
-    try:
-        gh_token = await exchange_code_for_token(body.code)
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"GitHub OAuth failed: {exc}")
-
-    # 2. Fetch GitHub user profile
-    try:
-        gh_user = await fetch_github_user(gh_token)
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Failed to fetch GitHub user: {exc}")
-
-    github_id = gh_user["id"]
-    username = gh_user["login"]
-
-    # 3. Find or create user
-    result = await db.execute(select(User).where(User.github_id == github_id))
-    user = result.scalar_one_or_none()
-
-    if user is None:
-        # Register new user
-        user = User(
-            github_id=github_id,
-            username=username,
-            display_name=gh_user.get("name"),
-            avatar_url=gh_user.get("avatar_url"),
-            email=gh_user.get("email"),
-        )
-        db.add(user)
-        await db.commit()
-        await db.refresh(user)
-        log.info("Registered new user: %s (github_id=%d)", username, github_id)
-    else:
-        # Update existing user on login
-        user.last_login = datetime.utcnow()
-        user.avatar_url = gh_user.get("avatar_url", user.avatar_url)
-        user.display_name = gh_user.get("name", user.display_name)
-        await db.commit()
-        await db.refresh(user)
-        log.info("User logged in: %s (github_id=%d)", username, github_id)
-
-    # 4. Issue JWT
-    token = create_access_token({"sub": str(user.github_id), "username": user.username})
-
-    return {
-        "token": token,
-        "user": {
-            "id": user.id,
-            "github_id": user.github_id,
-            "username": user.username,
-            "display_name": user.display_name,
-            "avatar_url": user.avatar_url,
-            "email": user.email,
-        },
-    }
-
-
-@app.get("/auth/me")
-async def auth_me(current_user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    """Return the currently authenticated user's profile."""
-    github_id = int(current_user["sub"])
-    result = await db.execute(select(User).where(User.github_id == github_id))
-    user = result.scalar_one_or_none()
-
-    if user is None:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    return {
-        "id": user.id,
-        "github_id": user.github_id,
-        "username": user.username,
-        "display_name": user.display_name,
-        "avatar_url": user.avatar_url,
-        "email": user.email,
-    }
-
-
-@app.post("/scrape/start")
+@app.post("/api/scrape/start")
 async def scrape_start(body: ScrapeRequest, background_tasks: BackgroundTasks):
     background_tasks.add_task(scrape_and_store, body.genres, body.repos_per_genre)
     return {"message": "scrape started", "genres": body.genres}
 
 
-@app.get("/stats/repo/{owner}/{repo}")
+@app.get("/api/stats/repo/{owner}/{repo}")
 async def stats_repo(owner: str, repo: str, db: AsyncSession = Depends(get_db)):
     full_name = f"{owner}/{repo}"
 
@@ -286,7 +198,7 @@ async def stats_repo(owner: str, repo: str, db: AsyncSession = Depends(get_db)):
     return {**_repo_dict(repo_row, clf), "genre_comparison": genre_stats}
 
 
-@app.get("/stats/developer/{username}")
+@app.get("/api/stats/developer/{username}")
 async def stats_developer(username: str, db: AsyncSession = Depends(get_db)):
     # Check DB cache
     result = await db.execute(
@@ -338,7 +250,7 @@ async def stats_developer(username: str, db: AsyncSession = Depends(get_db)):
     }
 
 
-@app.get("/repos/similar/{owner}/{repo}")
+@app.get("/api/repos/similar/{owner}/{repo}")
 async def similar_repos(owner: str, repo: str, db: AsyncSession = Depends(get_db)):
     full_name = f"{owner}/{repo}"
 
@@ -350,12 +262,18 @@ async def similar_repos(owner: str, repo: str, db: AsyncSession = Depends(get_db
     )
     repo_row = result.scalar_one_or_none()
 
-    if repo_row is None or repo_row.classification is None:
-        raise HTTPException(status_code=404, detail="Repo not found in DB. Fetch /stats/repo first.")
+    if repo_row is None:
+        try:
+            repo_row, clf = await _fetch_classify_store(full_name, db)
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=str(exc))
+    else:
+        clf = repo_row.classification
 
-    genre = repo_row.classification.genre
-    if not genre or genre == "unknown":
+    if clf is None or not clf.genre or clf.genre == "unknown":
         raise HTTPException(status_code=404, detail="No genre classification available for this repo.")
+
+    genre = clf.genre
 
     similar_result = await db.execute(
         select(Repository)
@@ -373,7 +291,7 @@ async def similar_repos(owner: str, repo: str, db: AsyncSession = Depends(get_db
     return [_repo_dict(r, r.classification) for r in similar]
 
 
-@app.post("/admin/reclassify")
+@app.post("/api/admin/reclassify")
 async def admin_reclassify(db: AsyncSession = Depends(get_db)):
     """Re-classify all repos in the DB that have genre=null or genre='unknown'."""
     result = await db.execute(
@@ -416,7 +334,7 @@ async def admin_reclassify(db: AsyncSession = Depends(get_db)):
     return {"reclassified": count}
 
 
-@app.get("/repos/search")
+@app.get("/api/repos/search")
 async def search_repos(q: str = Query(..., min_length=2), db: AsyncSession = Depends(get_db)):
     pattern = f"%{q}%"
     result = await db.execute(

@@ -1,4 +1,4 @@
-name: Build & Deploy
+name: Build & Deploy (GKE)
 
 on:
   workflow_dispatch:
@@ -10,6 +10,9 @@ env:
   GCP_REGION: us-central1
   GCP_REPOSITORY: git-stats
   GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+
+  GKE_CLUSTER: autopilot-cluster-1
+  GKE_REGION: us-central1
 
 jobs:
   build-and-deploy:
@@ -23,15 +26,15 @@ jobs:
     steps:
     - uses: actions/checkout@v4
       with:
-        fetch-depth: 0  # REQUIRED for tags
+        fetch-depth: 0
 
     - uses: docker/setup-buildx-action@v3
 
+    # Versioning for GitHub tag & release
     - name: Get next version
       id: version
       run: |
         git fetch --tags
-
         latest_tag=$(git tag --sort=-v:refname | head -n 1)
 
         if [ -z "$latest_tag" ]; then
@@ -43,18 +46,16 @@ jobs:
           new_tag="v$major.$minor.$patch"
         fi
 
-        echo "New tag: $new_tag"
         echo "tag=$new_tag" >> $GITHUB_OUTPUT
 
     - name: Create and push tag
       run: |
         git config user.name "github-actions"
         git config user.email "github-actions@github.com"
-
         git tag ${{ steps.version.outputs.tag }}
         git push origin ${{ steps.version.outputs.tag }}
 
-    # Auth
+    # Authentication
     - uses: docker/login-action@v3
       with:
         registry: ${{ env.REGISTRY_GHCR }}
@@ -68,11 +69,25 @@ jobs:
 
     - uses: google-github-actions/setup-gcloud@v2
       with:
-        project_id: ${{ secrets.GCP_PROJECT_ID }}
+        project_id: ${{ env.GCP_PROJECT_ID }}
+
+    - name: Install GKE auth plugin
+      run: |
+        gcloud components install gke-gcloud-auth-plugin --quiet
+
+    - name: Set auth plugin env
+      run: echo "USE_GKE_GCLOUD_AUTH_PLUGIN=True" >> $GITHUB_ENV
 
     - run: gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev
 
-    # Metadata
+    # GKE Credentials
+    - name: Connect to GKE cluster
+      run: |
+        gcloud container clusters get-credentials $GKE_CLUSTER \
+          --region $GKE_REGION \
+          --project $GCP_PROJECT_ID
+
+    # Create metadata
     - id: meta-backend
       uses: docker/metadata-action@v5
       with:
@@ -91,56 +106,53 @@ jobs:
         tags: |
           type=raw,value=${{ steps.version.outputs.tag }}
 
-    # Backend
+    # Build images
     - name: Build & push backend
       uses: docker/build-push-action@v5
       with:
-        context: .
+        context: ./backend
         file: ./backend/Dockerfile
         push: true
         tags: ${{ steps.meta-backend.outputs.tags }}
 
-    - name: Deploy backend
-      run: |
-        gcloud run deploy gitstats-backend \
-          --project=${{ env.GCP_PROJECT_ID }} \
-          --image=${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GCP_REPOSITORY }}/backend:${{ steps.version.outputs.tag }} \
-          --region=${{ env.GCP_REGION }} \
-          --platform=managed \
-          --allow-unauthenticated \
-          --set-env-vars="SUPABASE_URL=${{ secrets.SUPABASE_URL }},SECRET_KEY=${{ secrets.SECRET_KEY }},GIT_TOKEN=${{ secrets.GIT_TOKEN }},GIT_CLIENT_ID=${{ secrets.GIT_CLIENT_ID }},GIT_CLIENT_SECRET=${{ secrets.GIT_CLIENT_SECRET }},ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }},FRONTEND_URL=${{ secrets.FRONTEND_URL }}"
-
-    - name: Get backend URL
-      id: backend-url
-      run: |
-        URL=$(gcloud run services describe gitstats-backend \
-          --project=${{ env.GCP_PROJECT_ID }} \
-          --region=${{ env.GCP_REGION }} \
-          --format='value(status.url)')
-        echo "backend_url=$URL" >> $GITHUB_OUTPUT
-
-    # Frontend
     - name: Build & push frontend
       uses: docker/build-push-action@v5
       with:
         context: ./frontend
         file: ./frontend/Dockerfile
         push: true
-        tags: ${{ steps.meta-frontend.outputs.tags }}
         build-args: |
-          VITE_API_URL=${{ steps.backend-url.outputs.backend_url }}
+          VITE_API_URL=${{ secrets.VITE_API_URL }}
           VITE_GITHUB_CLIENT_ID=${{ secrets.GIT_CLIENT_ID }}
+        tags: ${{ steps.meta-frontend.outputs.tags }}
 
-    - name: Deploy frontend
+    # Deploy to GKE
+    - name: Create Kubernetes secrets
       run: |
-        gcloud run deploy gitstats-frontend \
-          --project=${{ env.GCP_PROJECT_ID }} \
-          --image=${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GCP_REPOSITORY }}/frontend:${{ steps.version.outputs.tag }} \
-          --platform=managed \
-          --region=${{ env.GCP_REGION }} \
-          --allow-unauthenticated
+        kubectl create secret generic backend-secrets \
+          --from-literal=SUPABASE_URL=${{ secrets.SUPABASE_URL }} \
+          --from-literal=SECRET_KEY=${{ secrets.SECRET_KEY }} \
+          --from-literal=GIT_TOKEN=${{ secrets.GIT_TOKEN }} \
+          --from-literal=GIT_CLIENT_ID=${{ secrets.GIT_CLIENT_ID }} \
+          --from-literal=GIT_CLIENT_SECRET=${{ secrets.GIT_CLIENT_SECRET }} \
+          --from-literal=ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }} \
+          --dry-run=client -o yaml | kubectl apply -f -
 
-    # Auto release notes
+    - name: Apply backend with image injected
+      run: |
+        sed "s|__BACKEND_IMAGE__|${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GCP_REPOSITORY }}/backend:${{ steps.version.outputs.tag }}|g" k8s/backend-deployment.yaml | kubectl apply -f -
+
+    - name: Apply frontend with image injected
+      run: |
+        sed "s|__FRONTEND_IMAGE__|${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GCP_REPOSITORY }}/frontend:${{ steps.version.outputs.tag }}|g" k8s/frontend-deployment.yaml | kubectl apply -f -
+
+    # Rollout
+    - name: Verify rollout
+      run: |
+        kubectl rollout status deployment/backend
+        kubectl rollout status deployment/frontend
+
+    # Release
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v2
       with:
