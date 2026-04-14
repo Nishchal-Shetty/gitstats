@@ -11,7 +11,11 @@ load_dotenv()
 
 DATABASE_URL = os.getenv("SUPABASE_URL")
 
-engine = create_async_engine(DATABASE_URL, echo=False, connect_args={"statement_cache_size": 0})
+engine = create_async_engine(
+    DATABASE_URL,
+    echo=False,
+    connect_args={"statement_cache_size": 0, "prepared_statement_cache_size": 0}
+)
 AsyncSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 
