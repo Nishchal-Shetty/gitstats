@@ -328,15 +328,120 @@ async def get_recommendations(
 
 
 @router.post("/refine")
-async def refine_recommendations(body: RecommendationsRefineRequest):
+async def refine_recommendations(
+    body: RecommendationsRefineRequest,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db)
+):
     """
-    Use Claude to filter / re-rank the provided repo list based on a free-text prompt.
+    Use Claude to:
+    1. Extract related technical keywords/topics from the user's free-text prompt.
+    2. Dynamically fetch new matching repos from the local DB + GitHub Search.
+    3. Re-rank the combined pool of repos (existing + new) matching the original prompt.
     """
-    if not body.repos:
+    if not body.prompt.strip() and not body.repos:
         return {"repos": []}
 
+    client = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+
+    # Stage 1: Topic / Keyword Expansion
+    extract_prompt = (
+        f"The user wants to find GitHub repositories matching this request: '{body.prompt}'.\n"
+        "Generate 3 to 5 related technical keywords, specific framework names, or GitHub topics "
+        "that would be excellent search terms to find matching repositories.\n"
+        "Do not just repeat their words verbatim—expand upon them with strongly related technical skills.\n"
+        "Return ONLY a valid JSON list of strings. Example: [\"react\", \"frontend\", \"typescript\"]"
+    )
+    
+    tags = []
+    try:
+        message = await client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=64,
+            messages=[{"role": "user", "content": extract_prompt}],
+        )
+        raw = message.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = "\n".join(line for line in raw.splitlines() if not line.startswith("```")).strip()
+        tags = _json.loads(raw)
+        if not isinstance(tags, list):
+            tags = [body.prompt]
+    except Exception as exc:
+        log.error("refine_recommendations extract tags error: %s", exc)
+        tags = [body.prompt]
+
+    # Stage 2: Database and GitHub Lookup
+    db_repos = []
+    seen_ids = {r.get("id") for r in body.repos if r.get("id") is not None}
+    seen_full = {r.get("full_name") for r in body.repos if r.get("full_name")}
+
+    from sqlalchemy import or_
+    base_q = select(Repository).options(selectinload(Repository.classification))
+    
+    for tag in tags[:3]:
+        # Search DB
+        res = await db.execute(
+            base_q.where(
+                or_(
+                    Repository.full_name.ilike(f"%{tag}%"),
+                    Repository.description.ilike(f"%{tag}%"),
+                    Repository.language.ilike(f"%{tag}%")
+                )
+            ).order_by(Repository.stars.desc()).limit(5)
+        )
+        for r in res.scalars().all():
+            if r.id not in seen_ids and r.full_name not in seen_full:
+                d = _repo_dict(r, r.classification)
+                d["source"] = "db_refine"
+                db_repos.append(d)
+                seen_ids.add(r.id)
+                seen_full.add(r.full_name)
+
+    github_recs = []
+    for tag in tags[:3]:
+        try:
+            results = await search_repositories(tag, min_stars=20, per_page=4)
+            for r in results:
+                if r.get("full_name") and r["full_name"] not in seen_full:
+                    github_recs.append({
+                        "id": None,
+                        "github_id": r["github_id"],
+                        "full_name": r["full_name"],
+                        "description": r.get("description"),
+                        "language": r.get("language"),
+                        "stars": r.get("stars", 0),
+                        "forks": r.get("forks", 0),
+                        "watchers": r.get("watchers", 0),
+                        "open_issues": r.get("open_issues", 0),
+                        "topics": r.get("topics", []),
+                        "size": r.get("size", 0),
+                        "contributor_count": None,
+                        "commit_count": None,
+                        "created_at": r.get("created_at"),
+                        "updated_at": r.get("updated_at"),
+                        "scraped_at": None,
+                        "genre": "unknown",
+                        "tags": [],
+                        "confidence": None,
+                        "source": "github_refine",
+                    })
+                    seen_full.add(r["full_name"])
+        except Exception as exc:
+            log.warning("Live search failed during refine: %s", exc)
+
+    if github_recs:
+        background_tasks.add_task(_persist_live_repos, github_recs)
+
+    # Combine all repos for final ranking
+    combined_pool = body.repos + db_repos + github_recs
+    if not combined_pool:
+        return {"repos": []}
+        
+    combined_pool = combined_pool[:40]
+
+    # Stage 3: Re-Ranking via Claude
     repo_summaries = []
-    for i, r in enumerate(body.repos):
+    for i, r in enumerate(combined_pool):
         repo_summaries.append(
             "{}: {} | lang={} | genre={} | stars={} | desc={}".format(
                 i,
@@ -360,7 +465,6 @@ async def refine_recommendations(body: RecommendationsRefineRequest):
         "Include at most 10. Example: [3, 0, 7]"
     ).format(body.username, body.prompt, repo_list_str)
 
-    client = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
     try:
         message = await client.messages.create(
             model="claude-haiku-4-5-20251001",
@@ -373,12 +477,12 @@ async def refine_recommendations(body: RecommendationsRefineRequest):
         indices = _json.loads(raw)
         if not isinstance(indices, list):
             raise ValueError("Claude returned non-list: {}".format(raw))
-        refined = [body.repos[i] for i in indices if isinstance(i, int) and 0 <= i < len(body.repos)]
-        log.info("refine_recommendations: Claude selected %d/%d repos", len(refined), len(body.repos))
+        refined = [combined_pool[i] for i in indices if isinstance(i, int) and 0 <= i < len(combined_pool)]
+        log.info("refine_recommendations: Claude selected %d/%d repos", len(refined), len(combined_pool))
         return {"repos": refined, "warning": None}
     except Exception as exc:
         log.error("refine_recommendations: error: %s", exc)
-        return {"repos": body.repos, "warning": str(exc)}
+        return {"repos": body.repos[:10], "warning": str(exc)}
 
 
 @router.get("/issues/{owner}/{repo}")

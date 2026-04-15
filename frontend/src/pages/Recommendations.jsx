@@ -84,8 +84,13 @@ function IssueCard({ issue }) {
             {issue.body_excerpt && (
                 <p className="text-xs text-gray-500 line-clamp-3 leading-relaxed flex-1 break-words">{issue.body_excerpt}</p>
             )}
-            <div className="flex flex-wrap gap-1 mt-auto pt-1">
-                {issue.labels.map((l) => <LabelChip key={l} name={l} />)}
+            <div className="flex flex-wrap items-center justify-between gap-1 mt-auto pt-2">
+                <div className="flex flex-wrap gap-1">
+                    {issue.labels.map((l) => <LabelChip key={l} name={l} />)}
+                </div>
+                <span className="text-[10px] uppercase font-bold tracking-wider text-indigo-400 opacity-0 group-hover/issue:opacity-100 transition-opacity">
+                    View Issue ↗
+                </span>
             </div>
         </a>
     );
