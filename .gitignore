@@ -1,6 +1,7 @@
 # Secrets
 backend/.env
 frontend/.env
+.env
 
 # Python
 **/__pycache__/

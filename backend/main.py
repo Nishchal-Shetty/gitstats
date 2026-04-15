@@ -12,6 +12,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from metrics import PrometheusHTTPMiddleware, metrics_response
 from classifier import classify_repository
 from auth import create_access_token, exchange_code_for_token, get_current_user
 from database import Developer, Repository, RepoClassification, User, get_db, init_db
@@ -43,6 +44,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(PrometheusHTTPMiddleware)
 
 app.include_router(recommendations_router, prefix="/api/recommendations", tags=["Recommendations"])
 
@@ -136,6 +138,10 @@ async def _fetch_classify_store(full_name: str, db: AsyncSession) -> tuple[Repos
 async def health():
     return {"status": "ok"}
 
+
+@app.get("/metrics")
+async def metrics():
+    return metrics_response()
 
 @app.post("/api/scrape/start")
 async def scrape_start(body: ScrapeRequest, background_tasks: BackgroundTasks):

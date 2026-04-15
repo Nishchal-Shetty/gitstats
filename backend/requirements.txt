@@ -13,3 +13,4 @@ anthropic
 PyGithub
 pydantic
 python-jose[cryptography]
+prometheus-client
