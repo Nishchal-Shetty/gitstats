@@ -1,3 +1,4 @@
+from __future__ import annotations
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -13,8 +14,13 @@ from sqlalchemy.orm import selectinload
 
 from metrics import PrometheusHTTPMiddleware, metrics_response
 from classifier import classify_repository
-from database import Developer, Repository, RepoClassification, get_db, init_db
-from scraper import get_developer_stats, get_repository_details, scrape_and_store, strip_tz
+from auth import create_access_token, exchange_code_for_token, get_current_user
+from database import Developer, Repository, RepoClassification, User, get_db, init_db
+from scraper import (
+    fetch_github_user, get_developer_stats, get_repository_details,
+    scrape_and_store, strip_tz,
+)
+from recommendations import router as recommendations_router
 
 load_dotenv()
 log = logging.getLogger(__name__)
@@ -40,6 +46,8 @@ app.add_middleware(
 )
 app.add_middleware(PrometheusHTTPMiddleware)
 
+app.include_router(recommendations_router, prefix="/api/recommendations", tags=["Recommendations"])
+
 
 # ---------------------------------------------------------------------------
 # Request bodies
@@ -48,6 +56,12 @@ app.add_middleware(PrometheusHTTPMiddleware)
 class ScrapeRequest(BaseModel):
     genres: list[str]
     repos_per_genre: int = 50
+
+
+class RecommendationsRefineRequest(BaseModel):
+    username: str
+    prompt: str
+    repos: list[dict]
 
 
 # ---------------------------------------------------------------------------
@@ -129,14 +143,13 @@ async def health():
 async def metrics():
     return metrics_response()
 
-
-@app.post("/scrape/start")
+@app.post("/api/scrape/start")
 async def scrape_start(body: ScrapeRequest, background_tasks: BackgroundTasks):
     background_tasks.add_task(scrape_and_store, body.genres, body.repos_per_genre)
     return {"message": "scrape started", "genres": body.genres}
 
 
-@app.get("/stats/repo/{owner}/{repo}")
+@app.get("/api/stats/repo/{owner}/{repo}")
 async def stats_repo(owner: str, repo: str, db: AsyncSession = Depends(get_db)):
     full_name = f"{owner}/{repo}"
 
@@ -204,7 +217,7 @@ async def stats_repo(owner: str, repo: str, db: AsyncSession = Depends(get_db)):
     return {**_repo_dict(repo_row, clf), "genre_comparison": genre_stats}
 
 
-@app.get("/stats/developer/{username}")
+@app.get("/api/stats/developer/{username}")
 async def stats_developer(username: str, db: AsyncSession = Depends(get_db)):
     # Check DB cache
     result = await db.execute(
@@ -256,7 +269,7 @@ async def stats_developer(username: str, db: AsyncSession = Depends(get_db)):
     }
 
 
-@app.get("/repos/similar/{owner}/{repo}")
+@app.get("/api/repos/similar/{owner}/{repo}")
 async def similar_repos(owner: str, repo: str, db: AsyncSession = Depends(get_db)):
     full_name = f"{owner}/{repo}"
 
@@ -268,12 +281,18 @@ async def similar_repos(owner: str, repo: str, db: AsyncSession = Depends(get_db
     )
     repo_row = result.scalar_one_or_none()
 
-    if repo_row is None or repo_row.classification is None:
-        raise HTTPException(status_code=404, detail="Repo not found in DB. Fetch /stats/repo first.")
+    if repo_row is None:
+        try:
+            repo_row, clf = await _fetch_classify_store(full_name, db)
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=str(exc))
+    else:
+        clf = repo_row.classification
 
-    genre = repo_row.classification.genre
-    if not genre or genre == "unknown":
+    if clf is None or not clf.genre or clf.genre == "unknown":
         raise HTTPException(status_code=404, detail="No genre classification available for this repo.")
+
+    genre = clf.genre
 
     similar_result = await db.execute(
         select(Repository)
@@ -291,7 +310,7 @@ async def similar_repos(owner: str, repo: str, db: AsyncSession = Depends(get_db
     return [_repo_dict(r, r.classification) for r in similar]
 
 
-@app.post("/admin/reclassify")
+@app.post("/api/admin/reclassify")
 async def admin_reclassify(db: AsyncSession = Depends(get_db)):
     """Re-classify all repos in the DB that have genre=null or genre='unknown'."""
     result = await db.execute(
@@ -334,7 +353,7 @@ async def admin_reclassify(db: AsyncSession = Depends(get_db)):
     return {"reclassified": count}
 
 
-@app.get("/repos/search")
+@app.get("/api/repos/search")
 async def search_repos(q: str = Query(..., min_length=2), db: AsyncSession = Depends(get_db)):
     pattern = f"%{q}%"
     result = await db.execute(
@@ -349,3 +368,5 @@ async def search_repos(q: str = Query(..., min_length=2), db: AsyncSession = Dep
     )
     repos = result.scalars().all()
     return [_repo_dict(r, r.classification) for r in repos]
+
+

@@ -1,3 +1,4 @@
+from __future__ import annotations
 import asyncio
 import base64
 import logging
@@ -22,8 +23,8 @@ def strip_tz(dt):
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 GITHUB_API = "https://api.github.com"
 
-# Keywords used when searching GitHub for each genre
-_GENRE_QUERIES: dict[str, list[str]] = {
+# Keywords used when searching GitHub for each genre (also used by recommendations)
+GENRE_QUERIES: dict[str, list[str]] = {
     "web_frontend":    ["react component library", "vue framework", "css design system", "frontend ui"],
     "web_backend":     ["rest api framework", "graphql server", "microservices backend", "authentication server"],
     "mobile":          ["react native app", "flutter mobile", "ios swift", "android kotlin"],
@@ -218,6 +219,86 @@ async def get_developer_stats(username: str) -> dict:
     }
 
 
+async def get_user_repos(username: str) -> list[dict]:
+    """
+    Return the user's own non-fork public repos with language, topics and stars.
+    Used by the recommendations engine to classify the user's areas of expertise.
+    """
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await _get(
+            client,
+            f"{GITHUB_API}/users/{username}/repos",
+            params={"per_page": 100, "sort": "stars", "type": "owner"},
+        )
+        resp.raise_for_status()
+        repos = resp.json()
+
+    return [
+        {
+            "full_name": r["full_name"],
+            "name": r["name"],
+            "description": r.get("description") or "",
+            "language": r.get("language"),
+            "topics": r.get("topics", []),
+            "stars": r.get("stargazers_count", 0),
+            "readme": "",  # List endpoint doesn't include README
+        }
+        for r in repos
+        if not r.get("fork", False)  # Ignore forks — classify original work only
+    ]
+
+
+async def fetch_repo_issues(owner: str, repo: str, per_page: int = 20) -> list[dict]:
+    """
+    Fetch open issues from a GitHub repo.
+    Prefers issues labelled 'good first issue' or 'help wanted';
+    falls back to any open issue when not enough labelled ones exist.
+    """
+    async with httpx.AsyncClient(timeout=30) as client:
+        # Try labelled issues first
+        labelled: list[dict] = []
+        for label in ("good first issue", "help wanted"):
+            if len(labelled) >= per_page:
+                break
+            resp = await _get(
+                client,
+                f"{GITHUB_API}/repos/{owner}/{repo}/issues",
+                params={"state": "open", "labels": label, "per_page": per_page, "sort": "created", "direction": "desc"},
+            )
+            if resp.status_code == 200:
+                for item in resp.json():
+                    if not item.get("pull_request") and item["number"] not in {i["number"] for i in labelled}:
+                        labelled.append(item)
+
+        # If we don't have enough, top up with any open issues
+        if len(labelled) < per_page:
+            resp = await _get(
+                client,
+                f"{GITHUB_API}/repos/{owner}/{repo}/issues",
+                params={"state": "open", "per_page": per_page, "sort": "created", "direction": "desc"},
+            )
+            if resp.status_code == 200:
+                existing_numbers = {i["number"] for i in labelled}
+                for item in resp.json():
+                    if not item.get("pull_request") and item["number"] not in existing_numbers:
+                        labelled.append(item)
+                    if len(labelled) >= per_page:
+                        break
+
+    return [
+        {
+            "number": i["number"],
+            "title": i["title"],
+            "body_excerpt": (i.get("body") or "")[:200].strip(),
+            "labels": [lbl["name"] for lbl in i.get("labels", [])],
+            "html_url": i["html_url"],
+            "comments": i.get("comments", 0),
+            "created_at": i["created_at"],
+        }
+        for i in labelled[:per_page]
+    ]
+
+
 async def fetch_github_user(token: str) -> dict:
     """Fetch the authenticated user's profile using their OAuth token."""
     async with httpx.AsyncClient(timeout=30) as client:
@@ -245,7 +326,7 @@ async def scrape_and_store(
 
     async with AsyncSessionLocal() as db:
         for genre in genres_to_scrape:
-            queries = _GENRE_QUERIES.get(genre, [genre])
+            queries = GENRE_QUERIES.get(genre, [genre])
             collected: dict[int, dict] = {}  # github_id → basic data, deduped
 
             log.info("[%s] Searching GitHub…", genre)

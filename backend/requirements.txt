@@ -4,7 +4,11 @@ httpx[http2]
 asyncpg
 sqlalchemy[asyncio]
 alembic
-python-dotenv
+python-dotenv==1.0.1
+uvicorn==0.27.1
+asyncpg==0.29.0
+python-multipart==0.0.9
+pdfminer.six==20231228
 anthropic
 PyGithub
 pydantic

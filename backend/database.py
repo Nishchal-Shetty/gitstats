@@ -3,7 +3,7 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import DeclarativeBase, sessionmaker, relationship
 from sqlalchemy import (
     Column, String, Integer, Text, DateTime, Float,
-    ForeignKey, JSON, func, UniqueConstraint,
+    ForeignKey, JSON, func, UniqueConstraint, NullPool
 )
 from dotenv import load_dotenv
 
@@ -11,7 +11,12 @@ load_dotenv()
 
 DATABASE_URL = os.getenv("SUPABASE_URL")
 
-engine = create_async_engine(DATABASE_URL, echo=False, connect_args={"statement_cache_size": 0})
+engine = create_async_engine(
+    DATABASE_URL,
+    echo=False,
+    poolclass=NullPool,
+    connect_args={"statement_cache_size": 0, "prepared_statement_cache_size": 0}
+)
 AsyncSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 
@@ -71,6 +76,19 @@ class Developer(Base):
     total_stars = Column(Integer, default=0)
     top_languages = Column(JSON, default=list)
     fetched_at = Column(DateTime, server_default=func.now())
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    github_id = Column(Integer, unique=True, nullable=False)
+    username = Column(String, nullable=False)
+    display_name = Column(String, nullable=True)
+    avatar_url = Column(String, nullable=True)
+    email = Column(String, nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+    last_login = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
 
 async def get_db():
