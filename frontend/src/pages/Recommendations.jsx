@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import axios from "axios";
+import { useAuth } from "../context/AuthContext";
 
 const API = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
@@ -364,9 +365,17 @@ function RefineBox({ username, repos, onRefined }) {
 // ─── Main page ───────────────────────────────────────────────────────────────
 
 export default function Recommendations() {
+    const { user: authUser } = useAuth();
     const [input, setInput] = useState("");
     const [username, setUsername] = useState(null);
     const [loading, setLoading] = useState(false);
+
+    // Auto-fill from GitHub login
+    useEffect(() => {
+        if (authUser?.username && !input && !username) {
+            setInput(authUser.username);
+        }
+    }, [authUser]);
     const [error, setError] = useState(null);
     const [data, setData] = useState(null);   // { username, top_languages, user_genres, recommendations }
     const [displayedRepos, setDisplayed] = useState([]);
@@ -560,6 +569,17 @@ export default function Recommendations() {
                         </span>
                     </div>
 
+                    {/* AI Refine box moved to top with other controls */}
+                    {displayedRepos.length > 0 && (
+                        <div className="mb-6">
+                            <RefineBox
+                                username={data.username}
+                                repos={displayedRepos}
+                                onRefined={(refined) => setDisplayed(refined)}
+                            />
+                        </div>
+                    )}
+
                     {displayedRepos.length === 0 ? (
                         <div className="text-center py-16 text-gray-500 text-sm">
                             No matching repositories found in the database yet.
@@ -581,13 +601,6 @@ export default function Recommendations() {
                             ))}
                         </div>
                     )}
-
-                    {/* AI Refine box — always shown once we have results */}
-                    <RefineBox
-                        username={data.username}
-                        repos={displayedRepos}
-                        onRefined={(refined) => setDisplayed(refined)}
-                    />
                 </>
             )}
         </div>
