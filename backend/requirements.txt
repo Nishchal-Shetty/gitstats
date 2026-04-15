@@ -13,3 +13,6 @@ anthropic
 PyGithub
 pydantic
 python-jose[cryptography]
+pytest
+pytest-asyncio
+aiosqlite
