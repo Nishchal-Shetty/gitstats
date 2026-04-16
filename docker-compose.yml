@@ -17,6 +17,6 @@ services:
       context: ./frontend
     container_name: gitstats-frontend
     ports:
-      - "5173:80"
+      - "5173:8080"
     depends_on:
       - backend
