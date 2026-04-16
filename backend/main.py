@@ -123,8 +123,10 @@ async def _fetch_classify_store(full_name: str, db: AsyncSession) -> tuple[Repos
         contributor_count=details["contributor_count"],
         commit_count=details["commit_count"],
     ).on_conflict_do_update(
-        index_elements=["full_name"],
-        set=dict(
+        index_elements=["github_id"],
+        set_=dict(
+            full_name=details["full_name"],
+            description=details["description"],
             readme=details["readme"],
             stars=details["stars"],
             forks=details["forks"],
@@ -133,6 +135,7 @@ async def _fetch_classify_store(full_name: str, db: AsyncSession) -> tuple[Repos
             language=details["language"],
             topics=details["topics"],
             size=details["size"],
+            created_at=strip_tz(datetime.fromisoformat(details["created_at"].replace("Z", "+00:00"))),
             updated_at=strip_tz(datetime.fromisoformat(details["updated_at"].replace("Z", "+00:00"))),
             contributor_count=details["contributor_count"],
             commit_count=details["commit_count"],
