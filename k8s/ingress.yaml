@@ -9,7 +9,7 @@ spec:
     - http:
         paths:
           - path: /api
-            pathType: ImplementationSpecific
+            pathType: Prefix
             backend:
               service:
                 name: backend
@@ -17,7 +17,7 @@ spec:
                   number: 80
 
           - path: /
-            pathType: ImplementationSpecific
+            pathType: Prefix
             backend:
               service:
                 name: frontend
