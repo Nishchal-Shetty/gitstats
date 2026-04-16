@@ -2,6 +2,9 @@ name: Build & Deploy (GKE)
 
 on:
   workflow_dispatch:
+  push:
+    tags:
+      - "v*.*.*"
 
 env:
   REGISTRY_GHCR: ghcr.io
@@ -29,12 +32,21 @@ jobs:
         fetch-depth: 0
 
     - uses: docker/setup-buildx-action@v3
+      if: "!startsWith(github.ref, 'refs/tags/')"
 
-    # Versioning for GitHub tag & release
-    - name: Get next version
+    # Version logic
+    - name: Determine version
       id: version
       run: |
         git fetch --tags
+
+        if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+          TAG="${GITHUB_REF#refs/tags/}"
+          echo "Using existing tag: $TAG"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          exit 0
+        fi
+
         latest_tag=$(git tag --sort=-v:refname | head -n 1)
 
         if [ -z "$latest_tag" ]; then
@@ -49,13 +61,14 @@ jobs:
         echo "tag=$new_tag" >> $GITHUB_OUTPUT
 
     - name: Create and push tag
+      if: "!startsWith(github.ref, 'refs/tags/')"
       run: |
         git config user.name "github-actions"
         git config user.email "github-actions@github.com"
         git tag ${{ steps.version.outputs.tag }}
         git push origin ${{ steps.version.outputs.tag }}
 
-    # Authentication
+    # Auth (required for deploy)
     - uses: docker/login-action@v3
       with:
         registry: ${{ env.REGISTRY_GHCR }}
@@ -72,22 +85,20 @@ jobs:
         project_id: ${{ env.GCP_PROJECT_ID }}
 
     - name: Install GKE auth plugin
-      run: |
-        gcloud components install gke-gcloud-auth-plugin --quiet
+      run: gcloud components install gke-gcloud-auth-plugin --quiet
 
     - name: Set auth plugin env
       run: echo "USE_GKE_GCLOUD_AUTH_PLUGIN=True" >> $GITHUB_ENV
 
     - run: gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev
 
-    # GKE Credentials
     - name: Connect to GKE cluster
       run: |
         gcloud container clusters get-credentials $GKE_CLUSTER \
           --region $GKE_REGION \
           --project $GCP_PROJECT_ID
 
-    # Create metadata
+    # Metadata (still needed for tag resolution)
     - id: meta-backend
       uses: docker/metadata-action@v5
       with:
@@ -106,8 +117,8 @@ jobs:
         tags: |
           type=raw,value=${{ steps.version.outputs.tag }}
 
-    # Build images
     - name: Build & push backend
+      if: "!startsWith(github.ref, 'refs/tags/')"
       uses: docker/build-push-action@v5
       with:
         context: ./backend
@@ -116,6 +127,7 @@ jobs:
         tags: ${{ steps.meta-backend.outputs.tags }}
 
     - name: Build & push frontend
+      if: "!startsWith(github.ref, 'refs/tags/')"
       uses: docker/build-push-action@v5
       with:
         context: ./frontend
@@ -126,7 +138,7 @@ jobs:
           VITE_GITHUB_CLIENT_ID=${{ secrets.GIT_CLIENT_ID }}
         tags: ${{ steps.meta-frontend.outputs.tags }}
 
-    # Deploy to GKE
+    # Deploy (always runs)
     - name: Create Kubernetes secrets
       run: |
         kubectl create secret generic backend-secrets \
@@ -138,45 +150,42 @@ jobs:
           --from-literal=ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }} \
           --dry-run=client -o yaml | kubectl apply -f -
 
-    # Backend
     - name: Apply backend
       run: |
         sed "s|__BACKEND_IMAGE__|${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GCP_REPOSITORY }}/backend:${{ steps.version.outputs.tag }}|g" k8s/backend-deployment.yaml | kubectl apply -f -
 
-    # Frontend
     - name: Apply frontend
       run: |
         sed "s|__FRONTEND_IMAGE__|${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GCP_REPOSITORY }}/frontend:${{ steps.version.outputs.tag }}|g" k8s/frontend-deployment.yaml | kubectl apply -f -
 
+    - name: Verify rollout
+      run: |
+        kubectl rollout status deployment/backend
+        kubectl rollout status deployment/frontend
+
     - name: Apply Prometheus config
       run: kubectl apply -f k8s/prometheus-config.yaml
 
-    # Prometheus
     - name: Deploy Prometheus
       run: |
         kubectl apply -f k8s/prometheus-deployment.yaml
         kubectl apply -f k8s/prometheus-service.yaml
 
-    # Grafana
     - name: Deploy Grafana
       run: |
         kubectl apply -f k8s/grafana-deployment.yaml
         kubectl apply -f k8s/grafana-service.yaml
 
-    # Ingress
     - name: Apply ingress
       run: kubectl apply -f k8s/ingress.yaml
 
-    # Rollout
-    - name: Verify rollout
+    - name: Verify second rollout
       run: |
-        kubectl rollout status deployment/backend
-        kubectl rollout status deployment/frontend
         kubectl rollout status deployment/grafana
         kubectl rollout status deployment/prometheus
 
-    # Release
     - name: Create GitHub Release
+      if: "!startsWith(github.ref, 'refs/tags/')"
       uses: softprops/action-gh-release@v2
       with:
         tag_name: ${{ steps.version.outputs.tag }}
