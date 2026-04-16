@@ -148,6 +148,9 @@ jobs:
       run: |
         sed "s|__FRONTEND_IMAGE__|${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GCP_REPOSITORY }}/frontend:${{ steps.version.outputs.tag }}|g" k8s/frontend-deployment.yaml | kubectl apply -f -
 
+    - name: Apply Prometheus config
+      run: kubectl apply -f k8s/prometheus-config.yaml
+
     # Prometheus
     - name: Deploy Prometheus
       run: |
