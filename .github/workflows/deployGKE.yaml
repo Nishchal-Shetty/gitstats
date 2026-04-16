@@ -118,7 +118,6 @@ jobs:
           type=raw,value=${{ steps.version.outputs.tag }}
 
     - name: Build & push backend
-      if: "!startsWith(github.ref, 'refs/tags/')"
       uses: docker/build-push-action@v5
       with:
         context: ./backend
@@ -127,7 +126,6 @@ jobs:
         tags: ${{ steps.meta-backend.outputs.tags }}
 
     - name: Build & push frontend
-      if: "!startsWith(github.ref, 'refs/tags/')"
       uses: docker/build-push-action@v5
       with:
         context: ./frontend
@@ -157,6 +155,10 @@ jobs:
     - name: Apply frontend
       run: |
         sed "s|__FRONTEND_IMAGE__|${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GCP_REPOSITORY }}/frontend:${{ steps.version.outputs.tag }}|g" k8s/frontend-deployment.yaml | kubectl apply -f -
+
+    - name: Deploy Prometheus Config
+      run: |
+        kubectl apply -f k8s/prometheus-config.yaml
 
     # Prometheus
     - name: Deploy Prometheus
