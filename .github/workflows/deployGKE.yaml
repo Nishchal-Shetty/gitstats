@@ -163,12 +163,6 @@ jobs:
         kubectl rollout status deployment/backend
         kubectl rollout status deployment/frontend
 
-    - name: Apply Prometheus config
-      run: kubectl apply -f k8s/prometheus-config.yaml
-
-    - name: Wait for ConfigMap
-      run: kubectl get configmap prometheus-config -o yaml
-
     - name: Deploy Prometheus
       run: |
         kubectl apply -f k8s/prometheus-deployment.yaml
