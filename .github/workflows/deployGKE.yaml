@@ -163,11 +163,9 @@ jobs:
         kubectl rollout status deployment/backend
         kubectl rollout status deployment/frontend
 
-    - name: Apply Prometheus config
-      run: kubectl apply -f k8s/prometheus-config.yaml
-
     - name: Deploy Prometheus
       run: |
+        kubectl apply -f k8s/prometheus-config.yaml
         kubectl apply -f k8s/prometheus-deployment.yaml
         kubectl apply -f k8s/prometheus-service.yaml
 
@@ -176,8 +174,8 @@ jobs:
         kubectl apply -f k8s/grafana-deployment.yaml
         kubectl apply -f k8s/grafana-service.yaml
 
-    #- name: Apply ingress
-    #  run: kubectl apply -f k8s/ingress.yaml
+    - name: Apply ingress
+      run: kubectl apply -f k8s/ingress.yaml
 
     - name: Verify second rollout
       run: |
