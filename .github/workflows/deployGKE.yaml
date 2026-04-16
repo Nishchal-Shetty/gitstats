@@ -158,26 +158,27 @@ jobs:
       run: |
         sed "s|__FRONTEND_IMAGE__|${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GCP_REPOSITORY }}/frontend:${{ steps.version.outputs.tag }}|g" k8s/frontend-deployment.yaml | kubectl apply -f -
 
-    - name: Verify rollout
-      run: |
-        kubectl rollout status deployment/backend
-        kubectl rollout status deployment/frontend
-
+    # Prometheus
     - name: Deploy Prometheus
       run: |
         kubectl apply -f k8s/prometheus-deployment.yaml
         kubectl apply -f k8s/prometheus-service.yaml
 
+    # Grafana
     - name: Deploy Grafana
       run: |
         kubectl apply -f k8s/grafana-deployment.yaml
         kubectl apply -f k8s/grafana-service.yaml
 
+    # Ingress
     - name: Apply ingress
       run: kubectl apply -f k8s/ingress.yaml
 
-    - name: Verify second rollout
+    # Rollout
+    - name: Verify rollout
       run: |
+        kubectl rollout status deployment/backend
+        kubectl rollout status deployment/frontend
         kubectl rollout status deployment/grafana
         kubectl rollout status deployment/prometheus
 
