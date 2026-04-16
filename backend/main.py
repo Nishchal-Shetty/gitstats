@@ -7,8 +7,13 @@ from datetime import datetime
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi_cache import FastAPICache
+from fastapi_cache.backends.redis import RedisBackend
+from fastapi_cache.decorator import cache
+from redis import asyncio as aioredis
 from pydantic import BaseModel
 from sqlalchemy import func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -32,6 +37,12 @@ log = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    redis = aioredis.from_url(
+        os.getenv("REDIS_URL", "redis://redis:6379"),
+        encoding="utf8",
+        decode_responses=True
+    )
+    FastAPICache.init(RedisBackend(redis), prefix="gitstats")
     yield
 
 app = FastAPI(title="GitStats API", version="1.0.0", lifespan=lifespan)
@@ -94,6 +105,44 @@ async def _fetch_classify_store(full_name: str, db: AsyncSession) -> tuple[Repos
     """Pull a repo from GitHub, classify it, persist both rows, and return them."""
     details = await get_repository_details(full_name)
 
+    # upsert
+    stmt = pg_insert(Repository).values(
+        github_id=details["github_id"],
+        full_name=details["full_name"],
+        description=details["description"],
+        readme=details["readme"],
+        stars=details["stars"],
+        forks=details["forks"],
+        watchers=details["watchers"],
+        open_issues=details["open_issues"],
+        language=details["language"],
+        topics=details["topics"],
+        size=details["size"],
+        created_at=strip_tz(datetime.fromisoformat(details["created_at"].replace("Z", "+00:00"))),
+        updated_at=strip_tz(datetime.fromisoformat(details["updated_at"].replace("Z", "+00:00"))),
+        contributor_count=details["contributor_count"],
+        commit_count=details["commit_count"],
+    ).on_conflict_do_update(
+        index_elements=["full_name"],
+        set=dict(
+            readme=details["readme"],
+            stars=details["stars"],
+            forks=details["forks"],
+            watchers=details["watchers"],
+            open_issues=details["open_issues"],
+            language=details["language"],
+            topics=details["topics"],
+            size=details["size"],
+            updated_at=strip_tz(datetime.fromisoformat(details["updated_at"].replace("Z", "+00:00"))),
+            contributor_count=details["contributor_count"],
+            commit_count=details["commit_count"],
+        )
+    ).returning(Repository)
+
+    result = await db.execute(stmt)
+    await db.flush()
+    repo = result.scalar_one()
+    """
     repo = Repository(
         github_id=details["github_id"],
         full_name=details["full_name"],
@@ -113,6 +162,7 @@ async def _fetch_classify_store(full_name: str, db: AsyncSession) -> tuple[Repos
     )
     db.add(repo)
     await db.flush()
+    """
 
     classification = await classify_repository(details)
     clf = RepoClassification(
@@ -144,6 +194,7 @@ async def scrape_start(body: ScrapeRequest, background_tasks: BackgroundTasks):
 
 
 @app.get("/api/stats/repo/{owner}/{repo}")
+@cache(expire=3600, namespace="repo")
 async def stats_repo(owner: str, repo: str, db: AsyncSession = Depends(get_db)):
     full_name = f"{owner}/{repo}"
 
@@ -212,6 +263,7 @@ async def stats_repo(owner: str, repo: str, db: AsyncSession = Depends(get_db)):
 
 
 @app.get("/api/stats/developer/{username}")
+@cache(expire=3600, namespace="developer")
 async def stats_developer(username: str, db: AsyncSession = Depends(get_db)):
     # Check DB cache
     result = await db.execute(
@@ -225,6 +277,33 @@ async def stats_developer(username: str, db: AsyncSession = Depends(get_db)):
         except Exception as exc:
             raise HTTPException(status_code=502, detail=str(exc))
 
+        # upsert to avoid uniqueViolationError
+        stmt = pg_insert(Developer).values(
+            github_username=data["github_username"],
+            display_name=data["display_name"],
+            avatar_url=data["avatar_url"],
+            followers=data["followers"],
+            following=data["following"],
+            public_repos=data["public_repos"],
+            total_stars=data["total_stars"],
+            top_languages=data["top_languages"],
+        ).on_conflict_do_update(
+            index_elements=["github_username"],
+            set_=dict(
+                display_name=data["display_name"],
+                avatar_url=data["avatar_url"],
+                followers=data["followers"],
+                following=data["following"],
+                public_repos=data["public_repos"],
+                total_stars=data["total_stars"],
+                top_languages=data["top_languages"],
+            )
+        ).returning(Developer)
+
+        result = await db.execute(stmt)
+        await db.commit()
+        dev = result.scalar_one()
+        """
         dev = Developer(
             github_username=data["github_username"],
             display_name=data["display_name"],
@@ -238,6 +317,7 @@ async def stats_developer(username: str, db: AsyncSession = Depends(get_db)):
         db.add(dev)
         await db.commit()
         await db.refresh(dev)
+        """
 
     # Top repos for this developer from DB
     top_repos_result = await db.execute(
@@ -264,6 +344,7 @@ async def stats_developer(username: str, db: AsyncSession = Depends(get_db)):
 
 
 @app.get("/api/repos/similar/{owner}/{repo}")
+@cache(expire=21600, namespace="similar")
 async def similar_repos(owner: str, repo: str, db: AsyncSession = Depends(get_db)):
     full_name = f"{owner}/{repo}"
 
@@ -344,10 +425,15 @@ async def admin_reclassify(db: AsyncSession = Depends(get_db)):
             log.error("Reclassify failed for %s: %s", repo_row.full_name, exc)
 
     await db.commit()
+    # prevent stale cache hits during reclassify
+    await FastAPICache.clear(namespace="repo")
+    await FastAPICache.clear(namespace="similar")
+    await FastAPICache.clear(namespace="recommendations")
     return {"reclassified": count}
 
 
 @app.get("/api/repos/search")
+@cache(expire=600, namespace="search")
 async def search_repos(q: str = Query(..., min_length=2), db: AsyncSession = Depends(get_db)):
     pattern = f"%{q}%"
     result = await db.execute(

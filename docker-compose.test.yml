@@ -1,0 +1,24 @@
+version: "3.9"
+
+services:
+  backend-test:
+    build:
+      context: ./backend
+    container_name: gitstats-backend-test
+    # Override the command to install dev-deps then run pytest
+    entrypoint: >
+      sh -c "pip install -r requirements-dev.txt && 
+             pytest tests/"
+    env_file:
+      - backend/.env
+    environment:
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      - redis
+    # Mount the local directory to see code changes without rebuilding
+    volumes:
+      - ./backend:/app
+
+  # Reuse the existing redis service
+  redis:
+    image: redis:7-alpine

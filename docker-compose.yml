@@ -11,6 +11,8 @@ services:
       - PORT=8080
     env_file:
       - backend/.env
+    depends_on:
+      - redis
 
   frontend:
     build:
@@ -22,3 +24,9 @@ services:
       - "5173:80"
     depends_on:
       - backend
+
+  redis:
+    image: redis:7-alpine
+    container_name: gitstats-redis
+    ports:
+      - "6379:6379"
