@@ -176,8 +176,8 @@ jobs:
         kubectl apply -f k8s/grafana-deployment.yaml
         kubectl apply -f k8s/grafana-service.yaml
 
-    - name: Apply ingress
-      run: kubectl apply -f k8s/ingress.yaml
+    #- name: Apply ingress
+    #  run: kubectl apply -f k8s/ingress.yaml
 
     - name: Verify second rollout
       run: |
