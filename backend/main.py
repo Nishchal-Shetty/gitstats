@@ -19,7 +19,10 @@ from sqlalchemy.orm import selectinload
 
 from classifier import classify_repository
 from auth import create_access_token, exchange_code_for_token, get_current_user
-from database import Developer, Repository, RepoClassification, User, get_db, init_db
+from database import (
+    Developer, Repository, RepoClassification, User, GenreSummary, 
+    PlatformSummary, TrendingRepos, get_db, init_db
+)
 from scraper import (
     fetch_github_user, get_developer_stats, get_repository_details,
     scrape_and_store, strip_tz,
@@ -432,6 +435,7 @@ async def admin_reclassify(db: AsyncSession = Depends(get_db)):
     await FastAPICache.clear(namespace="repo")
     await FastAPICache.clear(namespace="similar")
     await FastAPICache.clear(namespace="recommendations")
+    await FastAPICache.clear(namespace="analytics")
     return {"reclassified": count}
 
 
@@ -452,4 +456,44 @@ async def search_repos(q: str = Query(..., min_length=2), db: AsyncSession = Dep
     repos = result.scalars().all()
     return [_repo_dict(r, r.classification) for r in repos]
 
+#TODO restore cache functionaity after testing
+@app.get("/api/analytics/genres")
+#@cache(expire=3600, namespace="analytics")
+async def analytics_genres(db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(GenreSummary).order_by(GenreSummary.repo_count.desc())
+    )
+    summaries = result.scalars().all()
+    return [
+        {
+            "genre": s.genre,
+            "repo_count": s.repo_count,
+            "avg_stars": s.avg_stars,
+            "avg_forks": s.avg_forks,
+            "avg_issues": s.avg_issues,
+            "top_languages": s.top_languages,
+            "top_repos": s.top_repos,
+            "computed_at": s.computed_at,
+        }
+        for s in summaries
+    ]
 
+#TODO restore cache functionaity after testing
+@app.get("/api/analytics/platform")
+#@cache(expire=3600, namespace="analytics")
+async def analytics_platform(db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(PlatformSummary).where(PlatformSummary.id == 1))
+    summary = result.scalar_one_or_none()
+    if summary is None:
+        # Handles the window between first startup and first computation
+        raise HTTPException(status_code=503, detail="Analytics not yet computed.")
+    return summary
+
+#TODO restore cache functionaity after testing
+@app.get("/api/analytics/trending")
+#@cache(expire=3600, namespace="analytics")
+async def analytics_trending(db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(TrendingRepos).order_by(TrendingRepos.trend_score.desc())
+    )
+    return result.scalars().all()
