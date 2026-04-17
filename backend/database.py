@@ -104,6 +104,19 @@ class GenreSummary(Base):
     top_repos = Column(JSON, default=list)      #[{"full_name": "...", "stars": ...}]
     computed_at = Column(DateTime, default=datetime.now())
 
+class LanguageSummary(Base):
+    __tablename__ = "language_summaries"
+
+    id = Column(Integer, primary_key=True)
+    language = Column(String, unique=True, nullable=False)
+    repo_count = Column(Integer, default=0)
+    avg_stars = Column(Float, default=0)
+    avg_forks = Column(Float, default=0)
+    avg_issues = Column(Float, default=0)
+    top_genres = Column(JSON, default=list)  #[{"genre": "web_frontend", "count": 42}]
+    top_repos = Column(JSON, default=list)      #[{"full_name": "...", "stars": ...}]
+    computed_at = Column(DateTime, default=datetime.now())
+
 class PlatformSummary(Base):
     __tablename__ = "platform_summaries"
 

@@ -21,7 +21,7 @@ from classifier import classify_repository
 from auth import create_access_token, exchange_code_for_token, get_current_user
 from database import (
     Developer, Repository, RepoClassification, User, GenreSummary, 
-    PlatformSummary, TrendingRepos, get_db, init_db
+    LanguageSummary, PlatformSummary, TrendingRepos, get_db, init_db
 )
 from scraper import (
     fetch_github_user, get_developer_stats, get_repository_details,
@@ -472,6 +472,30 @@ async def analytics_genres(db: AsyncSession = Depends(get_db)):
             "avg_forks": s.avg_forks,
             "avg_issues": s.avg_issues,
             "top_languages": s.top_languages,
+            "top_repos": s.top_repos,
+            "computed_at": s.computed_at,
+        }
+        for s in summaries
+    ]
+
+#TODO restore cache functionaity after testing
+@app.get("/api/analytics/languages")
+#@cache(expire=3600, namespace="analytics")
+async def analytics_languages(db: AsyncSession = Depends(get_db)):
+    """Fetch precomputed language analytics and top repositories per language."""
+    result = await db.execute(
+        select(LanguageSummary).order_by(LanguageSummary.repo_count.desc())
+    )
+    summaries = result.scalars().all()
+    
+    return [
+        {
+            "language": s.language,
+            "repo_count": s.repo_count,
+            "avg_stars": s.avg_stars,
+            "avg_forks": s.avg_forks,
+            "avg_issues": s.avg_issues,
+            "top_genres": s.top_genres,
             "top_repos": s.top_repos,
             "computed_at": s.computed_at,
         }

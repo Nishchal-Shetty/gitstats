@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from database import (
-    Base, Developer, GenreSummary, PlatformSummary,
+    Base, Developer, GenreSummary, PlatformSummary, LanguageSummary,
     Repository, RepoClassification, TrendingRepos,
 )
 
@@ -111,6 +111,85 @@ async def compute_genre_summaries():
         await db.commit()
         log.info("Genre summaries computed for %d genres.", len(genres))
 
+async def compute_language_summaries():
+    """Precompute per-language statistics and store in language_summaries table."""
+    log.info("Computing language summaries...")
+    async with AsyncSessionLocal() as db:
+        # 1. Fetch all distinct languages
+        languages_result = await db.execute(
+            select(Repository.language)
+            .where(Repository.language != None)
+            .distinct()
+        )
+        languages = [r[0] for r in languages_result.fetchall()]
+
+        for lang in languages:
+            # 2. Aggregate general stats for this language
+            agg = await db.execute(
+                select(
+                    func.count(Repository.id).label("repo_count"),
+                    func.avg(Repository.stars).label("avg_stars"),
+                    func.avg(Repository.forks).label("avg_forks"),
+                    func.avg(Repository.open_issues).label("avg_issues"),
+                )
+                .where(Repository.language == lang)
+            )
+            row = agg.one()
+
+            # 3. Top genres for this language (Join with Classification)
+            genre_result = await db.execute(
+                select(RepoClassification.genre, func.count(Repository.id).label("count"))
+                .join(RepoClassification, RepoClassification.repo_id == Repository.id)
+                .where(Repository.language == lang)
+                .where(RepoClassification.genre != None)
+                .where(RepoClassification.genre != "unknown")
+                .group_by(RepoClassification.genre)
+                .order_by(func.count(Repository.id).desc())
+                .limit(5)
+            )
+            top_genres = [
+                {"genre": r.genre, "count": r.count}
+                for r in genre_result.fetchall()
+            ]
+
+            # 4. Top repos for this language by stars
+            top_repos_result = await db.execute(
+                select(Repository.full_name, Repository.stars, Repository.description)
+                .where(Repository.language == lang)
+                .order_by(Repository.stars.desc())
+                .limit(5)
+            )
+            top_repos = [
+                {"full_name": r.full_name, "stars": r.stars, "description": r.description}
+                for r in top_repos_result.fetchall()
+            ]
+
+            # 5. Upsert into language_summaries
+            stmt = pg_insert(LanguageSummary).values(
+                language=lang,
+                repo_count=row.repo_count,
+                avg_stars=round(row.avg_stars or 0, 2),
+                avg_forks=round(row.avg_forks or 0, 2),
+                avg_issues=round(row.avg_issues or 0, 2),
+                top_genres=top_genres,
+                top_repos=top_repos,
+                computed_at=datetime.now(),
+            ).on_conflict_do_update(
+                index_elements=["language"],
+                set_=dict(
+                    repo_count=row.repo_count,
+                    avg_stars=round(row.avg_stars or 0, 2),
+                    avg_forks=round(row.avg_forks or 0, 2),
+                    avg_issues=round(row.avg_issues or 0, 2),
+                    top_genres=top_genres,
+                    top_repos=top_repos,
+                    computed_at=datetime.now(),
+                )
+            )
+            await db.execute(stmt)
+
+        await db.commit()
+        log.info("Language summaries computed for %d languages.", len(languages))
 
 async def compute_platform_summary():
     """Precompute platform-wide statistics."""
@@ -227,6 +306,7 @@ async def compute_trending_repos():
 async def run_all():
     """Run all aggregation jobs in sequence."""
     await compute_genre_summaries()
+    await compute_language_summaries()
     await compute_platform_summary()
     await compute_trending_repos()
 
