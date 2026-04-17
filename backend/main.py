@@ -1,6 +1,7 @@
 from __future__ import annotations
 import logging
 import os
+import redis.asyncio as redis
 from contextlib import asynccontextmanager
 from datetime import datetime
 
@@ -10,7 +11,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi_cache import FastAPICache
 from fastapi_cache.backends.redis import RedisBackend
 from fastapi_cache.decorator import cache
-from redis import asyncio as aioredis
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -40,13 +40,16 @@ log = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
-    redis = aioredis.from_url(
-        os.getenv("REDIS_URL", "redis://redis:6379"),
-        encoding="utf8",
-        decode_responses=True
-    )
-    FastAPICache.init(RedisBackend(redis), prefix="gitstats")
+    
+    r_host = os.getenv("REDIS_HOST", "localhost")
+    r_port = int(os.getenv("REDIS_PORT", 6379))
+
+    redis_client = redis.Redis(host=r_host, port=r_port, decode_responses=True)
+    
+    FastAPICache.init(RedisBackend(redis_client), prefix="gitstats")
     yield
+
+    await redis_client.close()
 
 app = FastAPI(title="GitStats API", version="1.0.0", lifespan=lifespan)
 
@@ -148,27 +151,6 @@ async def _fetch_classify_store(full_name: str, db: AsyncSession) -> tuple[Repos
     result = await db.execute(stmt)
     await db.flush()
     repo = result.scalar_one()
-    """
-    repo = Repository(
-        github_id=details["github_id"],
-        full_name=details["full_name"],
-        description=details["description"],
-        readme=details["readme"],
-        stars=details["stars"],
-        forks=details["forks"],
-        watchers=details["watchers"],
-        open_issues=details["open_issues"],
-        language=details["language"],
-        topics=details["topics"],
-        size=details["size"],
-        created_at=strip_tz(datetime.fromisoformat(details["created_at"].replace("Z", "+00:00"))),
-        updated_at=strip_tz(datetime.fromisoformat(details["updated_at"].replace("Z", "+00:00"))),
-        contributor_count=details["contributor_count"],
-        commit_count=details["commit_count"],
-    )
-    db.add(repo)
-    await db.flush()
-    """
 
     classification = await classify_repository(details)
     clf = RepoClassification(
@@ -309,21 +291,6 @@ async def stats_developer(username: str, db: AsyncSession = Depends(get_db)):
         result = await db.execute(stmt)
         await db.commit()
         dev = result.scalar_one()
-        """
-        dev = Developer(
-            github_username=data["github_username"],
-            display_name=data["display_name"],
-            avatar_url=data["avatar_url"],
-            followers=data["followers"],
-            following=data["following"],
-            public_repos=data["public_repos"],
-            total_stars=data["total_stars"],
-            top_languages=data["top_languages"],
-        )
-        db.add(dev)
-        await db.commit()
-        await db.refresh(dev)
-        """
 
     # Top repos for this developer from DB
     top_repos_result = await db.execute(
