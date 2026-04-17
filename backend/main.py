@@ -456,9 +456,7 @@ async def search_repos(q: str = Query(..., min_length=2), db: AsyncSession = Dep
     repos = result.scalars().all()
     return [_repo_dict(r, r.classification) for r in repos]
 
-#TODO restore cache functionaity after testing
 @app.get("/api/analytics/genres")
-#@cache(expire=3600, namespace="analytics")
 async def analytics_genres(db: AsyncSession = Depends(get_db)):
     result = await db.execute(
         select(GenreSummary).order_by(GenreSummary.repo_count.desc())
@@ -478,9 +476,7 @@ async def analytics_genres(db: AsyncSession = Depends(get_db)):
         for s in summaries
     ]
 
-#TODO restore cache functionaity after testing
 @app.get("/api/analytics/languages")
-#@cache(expire=3600, namespace="analytics")
 async def analytics_languages(db: AsyncSession = Depends(get_db)):
     """Fetch precomputed language analytics and top repositories per language."""
     result = await db.execute(
@@ -502,9 +498,7 @@ async def analytics_languages(db: AsyncSession = Depends(get_db)):
         for s in summaries
     ]
 
-#TODO restore cache functionaity after testing
 @app.get("/api/analytics/platform")
-#@cache(expire=3600, namespace="analytics")
 async def analytics_platform(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(PlatformSummary).where(PlatformSummary.id == 1))
     summary = result.scalar_one_or_none()
@@ -513,9 +507,7 @@ async def analytics_platform(db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=503, detail="Analytics not yet computed.")
     return summary
 
-#TODO restore cache functionaity after testing
 @app.get("/api/analytics/trending")
-#@cache(expire=3600, namespace="analytics")
 async def analytics_trending(db: AsyncSession = Depends(get_db)):
     result = await db.execute(
         select(TrendingRepos).order_by(TrendingRepos.trend_score.desc())
