@@ -166,7 +166,7 @@ jobs:
           --from-literal=GITHUB_CLIENT_ID=${{ secrets.GIT_CLIENT_ID }} \
           --from-literal=GITHUB_CLIENT_SECRET=${{ secrets.GIT_CLIENT_SECRET }} \
           --from-literal=ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }} \
-          --from-literal=REDIS_HOST=10.14.104.115 \s
+          --from-literal=REDIS_HOST=10.14.104.115 \
           --from-literal=REDIS_PORT=6379 \
           --dry-run=client -o yaml | kubectl apply -f -
 
