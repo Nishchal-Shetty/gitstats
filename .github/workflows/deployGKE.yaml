@@ -117,6 +117,17 @@ jobs:
         tags: |
           type=raw,value=${{ steps.version.outputs.tag }}
 
+    # Create metadata for Analytics
+    - id: meta-analytics
+      uses: docker/metadata-action@v5
+      with:
+        images: |
+          ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}-analytics
+          ${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GCP_REPOSITORY }}/analytics
+        tags: |
+          type=raw,value=${{ steps.version.outputs.tag }}
+
+    # Build images
     - name: Build & push backend
       uses: docker/build-push-action@v5
       with:
@@ -136,7 +147,16 @@ jobs:
           VITE_GITHUB_CLIENT_ID=${{ secrets.GIT_CLIENT_ID }}
         tags: ${{ steps.meta-frontend.outputs.tags }}
 
-    # Deploy (always runs)
+    # Build & push Analytics
+    - name: Build & push analytics
+      uses: docker/build-push-action@v5
+      with:
+        context: ./backend
+        file: ./backend/Dockerfile.analytics
+        push: true
+        tags: ${{ steps.meta-analytics.outputs.tags }}
+
+    # Deploy to GKE
     - name: Create Kubernetes secrets
       run: |
         kubectl create secret generic backend-secrets \
@@ -146,8 +166,14 @@ jobs:
           --from-literal=GITHUB_CLIENT_ID=${{ secrets.GIT_CLIENT_ID }} \
           --from-literal=GITHUB_CLIENT_SECRET=${{ secrets.GIT_CLIENT_SECRET }} \
           --from-literal=ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }} \
+          --from-literal=REDIS_HOST=10.14.104.115 \s
+          --from-literal=REDIS_PORT=6379 \
           --dry-run=client -o yaml | kubectl apply -f -
 
+    - name: Apply Redis
+      run: kubectl apply -f k8s/redis-deployment.yaml
+
+    - name: Apply backend with image injected
     - name: Apply backend
       run: |
         sed "s|__BACKEND_IMAGE__|${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GCP_REPOSITORY }}/backend:${{ steps.version.outputs.tag }}|g" k8s/backend-deployment.yaml | kubectl apply -f -
@@ -156,6 +182,10 @@ jobs:
       run: |
         sed "s|__FRONTEND_IMAGE__|${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GCP_REPOSITORY }}/frontend:${{ steps.version.outputs.tag }}|g" k8s/frontend-deployment.yaml | kubectl apply -f -
 
+    - name: Apply analytics with image injected
+      run: |
+        sed "s|__ANALYTICS_IMAGE__|${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GCP_REPOSITORY }}/analytics:${{ steps.version.outputs.tag }}|g" k8s/analytics-deployment.yaml | kubectl apply -f -
+    
     - name: Deploy Prometheus Config
       run: |
         kubectl apply -f k8s/prometheus-config.yaml
@@ -181,6 +211,7 @@ jobs:
       run: |
         kubectl rollout status deployment/backend
         kubectl rollout status deployment/frontend
+        kubectl rollout status deployment/analytics
         kubectl rollout status deployment/grafana
         kubectl rollout status deployment/prometheus
 

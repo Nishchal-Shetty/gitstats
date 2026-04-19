@@ -6,6 +6,7 @@ import DevDashboard from "./pages/DevDashboard";
 import Compare from "./pages/Compare";
 import AuthCallback from "./pages/AuthCallback";
 import Recommendations from "./pages/Recommendations";
+import Analytics from "./pages/Analytics";
 
 const GITHUB_CLIENT_ID = import.meta.env.VITE_GITHUB_CLIENT_ID;
 
@@ -82,6 +83,14 @@ function Navbar() {
           >
             Recommendations
           </NavLink>
+          <NavLink 
+            to="/analytics"
+            className={({ isActive }) =>
+              `text-sm transition ${isActive ? "text-white" : "text-gray-400 hover:text-white"}`
+            }
+          >
+            Analytics
+          </NavLink>
           {!loading && (user ? <UserMenu /> : <LoginButton />)}
         </div>
       </div>
@@ -101,6 +110,7 @@ export default function App() {
           <Route path="/compare" element={<Compare />} />
           <Route path="/recommendations" element={<Recommendations />} />
           <Route path="/auth/callback" element={<AuthCallback />} />
+          <Route path="/analytics" element={<Analytics />} />
         </Routes>
       </div>
     </AuthProvider>
