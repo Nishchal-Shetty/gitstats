@@ -169,10 +169,7 @@ jobs:
           --from-literal=REDIS_HOST=10.14.104.115 \
           --from-literal=REDIS_PORT=6379 \
           --dry-run=client -o yaml | kubectl apply -f -
-
-    - name: Apply Redis
-      run: kubectl apply -f k8s/redis-deployment.yaml
-
+          
     - name: Apply backend
       run: |
         sed "s|__BACKEND_IMAGE__|${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GCP_REPOSITORY }}/backend:${{ steps.version.outputs.tag }}|g" k8s/backend-deployment.yaml | kubectl apply -f -
