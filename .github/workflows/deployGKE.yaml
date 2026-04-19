@@ -173,7 +173,6 @@ jobs:
     - name: Apply Redis
       run: kubectl apply -f k8s/redis-deployment.yaml
 
-    - name: Apply backend with image injected
     - name: Apply backend
       run: |
         sed "s|__BACKEND_IMAGE__|${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GCP_REPOSITORY }}/backend:${{ steps.version.outputs.tag }}|g" k8s/backend-deployment.yaml | kubectl apply -f -
