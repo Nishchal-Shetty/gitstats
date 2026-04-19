@@ -90,7 +90,7 @@ repo_compare_requests_total = Counter(
     ["outcome", "error_type"],
 )
 
-_REPO_COMPARE_ROUTE: Final = "/stats/repo/{owner}/{repo}"
+_REPO_COMPARE_ROUTE: Final = "/api/stats/repo/{owner}/{repo}"
 # Avoid raw URL paths on 404s (favicon, bots, typos) — unbounded Prometheus label cardinality.
 _UNMATCHED_ROUTE: Final = "_unmatched"
 
@@ -113,7 +113,7 @@ def _record_repo_compare(status_code: int) -> None:
 class PrometheusHTTPMiddleware(BaseHTTPMiddleware):
     """Records HTTP metrics; skips /metrics and /health."""
 
-    SKIP_PATHS = frozenset({"/metrics", "/health"})
+    SKIP_PATHS = frozenset({"/api/metrics", "/metrics", "/health"})
 
     async def dispatch(self, request: Request, call_next):
         if request.url.path in self.SKIP_PATHS:

@@ -2,6 +2,9 @@ name: Build & Deploy (GKE)
 
 on:
   workflow_dispatch:
+  push:
+    tags:
+      - "v*.*.*"
 
 env:
   REGISTRY_GHCR: ghcr.io
@@ -29,12 +32,21 @@ jobs:
         fetch-depth: 0
 
     - uses: docker/setup-buildx-action@v3
+      if: "!startsWith(github.ref, 'refs/tags/')"
 
-    # Versioning for GitHub tag & release
-    - name: Get next version
+    # Version logic
+    - name: Determine version
       id: version
       run: |
         git fetch --tags
+
+        if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+          TAG="${GITHUB_REF#refs/tags/}"
+          echo "Using existing tag: $TAG"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          exit 0
+        fi
+
         latest_tag=$(git tag --sort=-v:refname | head -n 1)
 
         if [ -z "$latest_tag" ]; then
@@ -49,13 +61,14 @@ jobs:
         echo "tag=$new_tag" >> $GITHUB_OUTPUT
 
     - name: Create and push tag
+      if: "!startsWith(github.ref, 'refs/tags/')"
       run: |
         git config user.name "github-actions"
         git config user.email "github-actions@github.com"
         git tag ${{ steps.version.outputs.tag }}
         git push origin ${{ steps.version.outputs.tag }}
 
-    # Authentication
+    # Auth (required for deploy)
     - uses: docker/login-action@v3
       with:
         registry: ${{ env.REGISTRY_GHCR }}
@@ -72,22 +85,20 @@ jobs:
         project_id: ${{ env.GCP_PROJECT_ID }}
 
     - name: Install GKE auth plugin
-      run: |
-        gcloud components install gke-gcloud-auth-plugin --quiet
+      run: gcloud components install gke-gcloud-auth-plugin --quiet
 
     - name: Set auth plugin env
       run: echo "USE_GKE_GCLOUD_AUTH_PLUGIN=True" >> $GITHUB_ENV
 
     - run: gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev
 
-    # GKE Credentials
     - name: Connect to GKE cluster
       run: |
         gcloud container clusters get-credentials $GKE_CLUSTER \
           --region $GKE_REGION \
           --project $GCP_PROJECT_ID
 
-    # Create metadata
+    # Metadata (still needed for tag resolution)
     - id: meta-backend
       uses: docker/metadata-action@v5
       with:
@@ -103,6 +114,16 @@ jobs:
         images: |
           ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}-frontend
           ${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GCP_REPOSITORY }}/frontend
+        tags: |
+          type=raw,value=${{ steps.version.outputs.tag }}
+
+    # Create metadata for Analytics
+    - id: meta-analytics
+      uses: docker/metadata-action@v5
+      with:
+        images: |
+          ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}-analytics
+          ${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GCP_REPOSITORY }}/analytics
         tags: |
           type=raw,value=${{ steps.version.outputs.tag }}
 
@@ -126,6 +147,15 @@ jobs:
           VITE_GITHUB_CLIENT_ID=${{ secrets.GIT_CLIENT_ID }}
         tags: ${{ steps.meta-frontend.outputs.tags }}
 
+    # Build & push Analytics
+    - name: Build & push analytics
+      uses: docker/build-push-action@v5
+      with:
+        context: ./backend
+        file: ./backend/Dockerfile.analytics
+        push: true
+        tags: ${{ steps.meta-analytics.outputs.tags }}
+
     # Deploy to GKE
     - name: Create Kubernetes secrets
       run: |
@@ -136,24 +166,53 @@ jobs:
           --from-literal=GITHUB_CLIENT_ID=${{ secrets.GIT_CLIENT_ID }} \
           --from-literal=GITHUB_CLIENT_SECRET=${{ secrets.GIT_CLIENT_SECRET }} \
           --from-literal=ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }} \
+          --from-literal=REDIS_HOST=10.14.104.115 \
+          --from-literal=REDIS_PORT=6379 \
           --dry-run=client -o yaml | kubectl apply -f -
-
-    - name: Apply backend with image injected
+          
+    - name: Apply backend
       run: |
         sed "s|__BACKEND_IMAGE__|${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GCP_REPOSITORY }}/backend:${{ steps.version.outputs.tag }}|g" k8s/backend-deployment.yaml | kubectl apply -f -
 
-    - name: Apply frontend with image injected
+    - name: Apply frontend
       run: |
         sed "s|__FRONTEND_IMAGE__|${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GCP_REPOSITORY }}/frontend:${{ steps.version.outputs.tag }}|g" k8s/frontend-deployment.yaml | kubectl apply -f -
+
+    - name: Apply analytics with image injected
+      run: |
+        sed "s|__ANALYTICS_IMAGE__|${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GCP_REPOSITORY }}/analytics:${{ steps.version.outputs.tag }}|g" k8s/analytics-deployment.yaml | kubectl apply -f -
+    
+    - name: Deploy Prometheus Config
+      run: |
+        kubectl apply -f k8s/prometheus-config.yaml
+
+    # Prometheus
+    - name: Deploy Prometheus
+      run: |
+        kubectl apply -f k8s/prometheus-deployment.yaml
+        kubectl apply -f k8s/prometheus-service.yaml
+
+    # Grafana
+    - name: Deploy Grafana
+      run: |
+        kubectl apply -f k8s/grafana-deployment.yaml
+        kubectl apply -f k8s/grafana-service.yaml
+
+    # Ingress
+    - name: Apply ingress
+      run: kubectl apply -f k8s/ingress.yaml
 
     # Rollout
     - name: Verify rollout
       run: |
         kubectl rollout status deployment/backend
         kubectl rollout status deployment/frontend
+        kubectl rollout status deployment/analytics
+        kubectl rollout status deployment/grafana
+        kubectl rollout status deployment/prometheus
 
-    # Release
     - name: Create GitHub Release
+      if: "!startsWith(github.ref, 'refs/tags/')"
       uses: softprops/action-gh-release@v2
       with:
         tag_name: ${{ steps.version.outputs.tag }}

@@ -1,21 +1,29 @@
 from __future__ import annotations
 import logging
 import os
+import redis.asyncio as redis
 from contextlib import asynccontextmanager
 from datetime import datetime
 
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi_cache import FastAPICache
+from fastapi_cache.backends.redis import RedisBackend
+from fastapi_cache.decorator import cache
 from pydantic import BaseModel
 from sqlalchemy import func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from metrics import PrometheusHTTPMiddleware, metrics_response
 from classifier import classify_repository
 from auth import create_access_token, exchange_code_for_token, get_current_user
-from database import Developer, Repository, RepoClassification, User, get_db, init_db
+from database import (
+    Developer, Repository, RepoClassification, User, GenreSummary, 
+    LanguageSummary, PlatformSummary, TrendingRepos, get_db, init_db
+)
 from scraper import (
     fetch_github_user, get_developer_stats, get_repository_details,
     scrape_and_store, strip_tz,
@@ -33,7 +41,16 @@ log = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    
+    r_host = os.getenv("REDIS_HOST", "localhost")
+    r_port = int(os.getenv("REDIS_PORT", 6379))
+
+    redis_client = redis.Redis(host=r_host, port=r_port, decode_responses=True)
+    
+    FastAPICache.init(RedisBackend(redis_client), prefix="gitstats")
     yield
+
+    await redis_client.close()
 
 app = FastAPI(title="GitStats API", version="1.0.0", lifespan=lifespan)
 
@@ -96,7 +113,8 @@ async def _fetch_classify_store(full_name: str, db: AsyncSession) -> tuple[Repos
     """Pull a repo from GitHub, classify it, persist both rows, and return them."""
     details = await get_repository_details(full_name)
 
-    repo = Repository(
+    # upsert
+    stmt = pg_insert(Repository).values(
         github_id=details["github_id"],
         full_name=details["full_name"],
         description=details["description"],
@@ -112,9 +130,29 @@ async def _fetch_classify_store(full_name: str, db: AsyncSession) -> tuple[Repos
         updated_at=strip_tz(datetime.fromisoformat(details["updated_at"].replace("Z", "+00:00"))),
         contributor_count=details["contributor_count"],
         commit_count=details["commit_count"],
-    )
-    db.add(repo)
+    ).on_conflict_do_update(
+        index_elements=["github_id"],
+        set_=dict(
+            full_name=details["full_name"],
+            description=details["description"],
+            readme=details["readme"],
+            stars=details["stars"],
+            forks=details["forks"],
+            watchers=details["watchers"],
+            open_issues=details["open_issues"],
+            language=details["language"],
+            topics=details["topics"],
+            size=details["size"],
+            created_at=strip_tz(datetime.fromisoformat(details["created_at"].replace("Z", "+00:00"))),
+            updated_at=strip_tz(datetime.fromisoformat(details["updated_at"].replace("Z", "+00:00"))),
+            contributor_count=details["contributor_count"],
+            commit_count=details["commit_count"],
+        )
+    ).returning(Repository)
+
+    result = await db.execute(stmt)
     await db.flush()
+    repo = result.scalar_one()
 
     classification = await classify_repository(details)
     clf = RepoClassification(
@@ -139,9 +177,96 @@ async def health():
     return {"status": "ok"}
 
 
-@app.get("/metrics")
+@app.get("/api/metrics")
 async def metrics():
     return metrics_response()
+
+
+# ---------------------------------------------------------------------------
+# Auth endpoints
+# ---------------------------------------------------------------------------
+
+class GitHubAuthRequest(BaseModel):
+    code: str
+
+
+@app.post("/api/auth/github")
+async def auth_github(body: GitHubAuthRequest, db: AsyncSession = Depends(get_db)):
+    """Exchange GitHub OAuth code for a JWT. Creates user if new, updates last_login if existing."""
+    # 1. Exchange code for GitHub access token
+    try:
+        gh_token = await exchange_code_for_token(body.code)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"GitHub OAuth failed: {exc}")
+
+    # 2. Fetch GitHub user profile
+    try:
+        gh_user = await fetch_github_user(gh_token)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to fetch GitHub user: {exc}")
+
+    github_id = gh_user["id"]
+    username = gh_user["login"]
+
+    # 3. Find or create user
+    result = await db.execute(select(User).where(User.github_id == github_id))
+    user = result.scalar_one_or_none()
+
+    if user is None:
+        user = User(
+            github_id=github_id,
+            username=username,
+            display_name=gh_user.get("name"),
+            avatar_url=gh_user.get("avatar_url"),
+            email=gh_user.get("email"),
+        )
+        db.add(user)
+        await db.commit()
+        await db.refresh(user)
+        log.info("Registered new user: %s (github_id=%d)", username, github_id)
+    else:
+        user.last_login = datetime.utcnow()
+        user.avatar_url = gh_user.get("avatar_url", user.avatar_url)
+        user.display_name = gh_user.get("name", user.display_name)
+        await db.commit()
+        await db.refresh(user)
+        log.info("User logged in: %s (github_id=%d)", username, github_id)
+
+    # 4. Issue JWT
+    token = create_access_token({"sub": str(user.github_id), "username": user.username})
+
+    return {
+        "token": token,
+        "user": {
+            "id": user.id,
+            "github_id": user.github_id,
+            "username": user.username,
+            "display_name": user.display_name,
+            "avatar_url": user.avatar_url,
+            "email": user.email,
+        },
+    }
+
+
+@app.get("/api/auth/me")
+async def auth_me(current_user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    """Return the currently authenticated user's profile."""
+    github_id = int(current_user["sub"])
+    result = await db.execute(select(User).where(User.github_id == github_id))
+    user = result.scalar_one_or_none()
+
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    return {
+        "id": user.id,
+        "github_id": user.github_id,
+        "username": user.username,
+        "display_name": user.display_name,
+        "avatar_url": user.avatar_url,
+        "email": user.email,
+    }
+
 
 @app.post("/api/scrape/start")
 async def scrape_start(body: ScrapeRequest, background_tasks: BackgroundTasks):
@@ -150,6 +275,7 @@ async def scrape_start(body: ScrapeRequest, background_tasks: BackgroundTasks):
 
 
 @app.get("/api/stats/repo/{owner}/{repo}")
+@cache(expire=3600, namespace="repo")
 async def stats_repo(owner: str, repo: str, db: AsyncSession = Depends(get_db)):
     full_name = f"{owner}/{repo}"
 
@@ -218,6 +344,7 @@ async def stats_repo(owner: str, repo: str, db: AsyncSession = Depends(get_db)):
 
 
 @app.get("/api/stats/developer/{username}")
+@cache(expire=3600, namespace="developer")
 async def stats_developer(username: str, db: AsyncSession = Depends(get_db)):
     # Check DB cache
     result = await db.execute(
@@ -231,7 +358,8 @@ async def stats_developer(username: str, db: AsyncSession = Depends(get_db)):
         except Exception as exc:
             raise HTTPException(status_code=502, detail=str(exc))
 
-        dev = Developer(
+        # upsert to avoid uniqueViolationError
+        stmt = pg_insert(Developer).values(
             github_username=data["github_username"],
             display_name=data["display_name"],
             avatar_url=data["avatar_url"],
@@ -240,10 +368,22 @@ async def stats_developer(username: str, db: AsyncSession = Depends(get_db)):
             public_repos=data["public_repos"],
             total_stars=data["total_stars"],
             top_languages=data["top_languages"],
-        )
-        db.add(dev)
+        ).on_conflict_do_update(
+            index_elements=["github_username"],
+            set_=dict(
+                display_name=data["display_name"],
+                avatar_url=data["avatar_url"],
+                followers=data["followers"],
+                following=data["following"],
+                public_repos=data["public_repos"],
+                total_stars=data["total_stars"],
+                top_languages=data["top_languages"],
+            )
+        ).returning(Developer)
+
+        result = await db.execute(stmt)
         await db.commit()
-        await db.refresh(dev)
+        dev = result.scalar_one()
 
     # Top repos for this developer from DB
     top_repos_result = await db.execute(
@@ -270,6 +410,7 @@ async def stats_developer(username: str, db: AsyncSession = Depends(get_db)):
 
 
 @app.get("/api/repos/similar/{owner}/{repo}")
+@cache(expire=21600, namespace="similar")
 async def similar_repos(owner: str, repo: str, db: AsyncSession = Depends(get_db)):
     full_name = f"{owner}/{repo}"
 
@@ -350,10 +491,16 @@ async def admin_reclassify(db: AsyncSession = Depends(get_db)):
             log.error("Reclassify failed for %s: %s", repo_row.full_name, exc)
 
     await db.commit()
+    # prevent stale cache hits during reclassify
+    await FastAPICache.clear(namespace="repo")
+    await FastAPICache.clear(namespace="similar")
+    await FastAPICache.clear(namespace="recommendations")
+    await FastAPICache.clear(namespace="analytics")
     return {"reclassified": count}
 
 
 @app.get("/api/repos/search")
+@cache(expire=600, namespace="search")
 async def search_repos(q: str = Query(..., min_length=2), db: AsyncSession = Depends(get_db)):
     pattern = f"%{q}%"
     result = await db.execute(
@@ -369,4 +516,60 @@ async def search_repos(q: str = Query(..., min_length=2), db: AsyncSession = Dep
     repos = result.scalars().all()
     return [_repo_dict(r, r.classification) for r in repos]
 
+@app.get("/api/analytics/genres")
+async def analytics_genres(db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(GenreSummary).order_by(GenreSummary.repo_count.desc())
+    )
+    summaries = result.scalars().all()
+    return [
+        {
+            "genre": s.genre,
+            "repo_count": s.repo_count,
+            "avg_stars": s.avg_stars,
+            "avg_forks": s.avg_forks,
+            "avg_issues": s.avg_issues,
+            "top_languages": s.top_languages,
+            "top_repos": s.top_repos,
+            "computed_at": s.computed_at,
+        }
+        for s in summaries
+    ]
 
+@app.get("/api/analytics/languages")
+async def analytics_languages(db: AsyncSession = Depends(get_db)):
+    """Fetch precomputed language analytics and top repositories per language."""
+    result = await db.execute(
+        select(LanguageSummary).order_by(LanguageSummary.repo_count.desc())
+    )
+    summaries = result.scalars().all()
+    
+    return [
+        {
+            "language": s.language,
+            "repo_count": s.repo_count,
+            "avg_stars": s.avg_stars,
+            "avg_forks": s.avg_forks,
+            "avg_issues": s.avg_issues,
+            "top_genres": s.top_genres,
+            "top_repos": s.top_repos,
+            "computed_at": s.computed_at,
+        }
+        for s in summaries
+    ]
+
+@app.get("/api/analytics/platform")
+async def analytics_platform(db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(PlatformSummary).where(PlatformSummary.id == 1))
+    summary = result.scalar_one_or_none()
+    if summary is None:
+        # Handles the window between first startup and first computation
+        raise HTTPException(status_code=503, detail="Analytics not yet computed.")
+    return summary
+
+@app.get("/api/analytics/trending")
+async def analytics_trending(db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(TrendingRepos).order_by(TrendingRepos.trend_score.desc())
+    )
+    return result.scalars().all()
