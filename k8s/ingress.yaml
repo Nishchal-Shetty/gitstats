@@ -9,7 +9,7 @@ spec:
     - http:
         paths:
           - path: /api
-            pathType: ImplementationSpecific
+            pathType: Prefix
             backend:
               service:
                 name: backend
@@ -17,9 +17,17 @@ spec:
                   number: 80
 
           - path: /
-            pathType: ImplementationSpecific
+            pathType: Prefix
             backend:
               service:
                 name: frontend
                 port:
                   number: 80
+            
+          - path: /grafana
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: grafana
+                port:
+                  number: 3000
