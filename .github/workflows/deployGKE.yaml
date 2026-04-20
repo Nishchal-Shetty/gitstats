@@ -256,6 +256,44 @@ jobs:
           echo "::notice title=Grafana URL::${URL}"
         fi
 
+        echo ""
+        echo "Waiting for Prometheus LoadBalancer address (up to ~5 minutes)..."
+        PADDR=""
+        for i in $(seq 1 60); do
+          echo ""
+          echo "--- prometheus poll ${i}/60 ($(date -u +%H:%M:%S) UTC) ---"
+          timeout 45s kubectl get svc prometheus -o wide 2>&1 || echo "(kubectl get timed out or failed — check cluster connectivity)"
+          PJSON=""
+          PJSON=$(timeout 45s kubectl get svc prometheus -o json 2>/dev/null) || true
+          if [ -n "$PJSON" ]; then
+            PIP=$(echo "$PJSON" | jq -r '(.status.loadBalancer.ingress // []) | map(select(.ip != null and .ip != "")) | .[0].ip // empty')
+            PHOST=$(echo "$PJSON" | jq -r '(.status.loadBalancer.ingress // []) | map(select(.hostname != null and .hostname != "")) | .[0].hostname // empty')
+            if [ -n "$PIP" ]; then
+              PADDR="$PIP"
+              break
+            fi
+            if [ -n "$PHOST" ]; then
+              PADDR="$PHOST"
+              break
+            fi
+          fi
+          sleep 5
+        done
+        if [ -z "$PADDR" ]; then
+          echo ""
+          echo "No Prometheus LoadBalancer IP/hostname after waiting."
+          kubectl get svc prometheus -o wide || true
+          kubectl describe svc prometheus || true
+        else
+          PURL="http://${PADDR}:9090/"
+          echo ""
+          echo "=========================================="
+          echo "  Prometheus: ${PURL}"
+          echo "=========================================="
+          echo ""
+          echo "::notice title=Prometheus URL::${PURL}"
+        fi
+
     - name: Create GitHub Release
       if: "!startsWith(github.ref, 'refs/tags/')"
       uses: softprops/action-gh-release@v2
