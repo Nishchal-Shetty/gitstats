@@ -218,6 +218,37 @@ jobs:
         kubectl rollout status deployment/grafana
         kubectl rollout status deployment/prometheus
 
+    - name: Print Grafana URL
+      run: |
+        set -e
+        echo "Waiting for Grafana LoadBalancer address (up to ~5 minutes)..."
+        ADDR=""
+        for i in $(seq 1 60); do
+          IP=$(kubectl get svc grafana -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)
+          HOST=$(kubectl get svc grafana -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || true)
+          if [ -n "$IP" ]; then
+            ADDR="$IP"
+            break
+          fi
+          if [ -n "$HOST" ]; then
+            ADDR="$HOST"
+            break
+          fi
+          sleep 5
+        done
+        if [ -z "$ADDR" ]; then
+          echo "Grafana LoadBalancer address not ready yet. Run: kubectl get svc grafana"
+          kubectl get svc grafana -o wide || true
+          exit 0
+        fi
+        URL="http://${ADDR}/"
+        echo ""
+        echo "=========================================="
+        echo "  Grafana: ${URL}"
+        echo "=========================================="
+        echo ""
+        echo "::notice title=Grafana URL::${URL}"
+
     - name: Create GitHub Release
       if: "!startsWith(github.ref, 'refs/tags/')"
       uses: softprops/action-gh-release@v2
