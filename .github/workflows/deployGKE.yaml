@@ -1,4 +1,4 @@
-name: Build & Deploy (GKE) with grafana and prometheus
+name: Build & Deploy (GKE)
 
 on:
   workflow_dispatch:
