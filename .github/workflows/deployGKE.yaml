@@ -191,12 +191,23 @@ jobs:
       run: |
         kubectl apply -f k8s/prometheus-deployment.yaml
         kubectl apply -f k8s/prometheus-service.yaml
+        # ConfigMap updates do not reload Prometheus; restart so scrape_path / job_name apply.
+        kubectl rollout restart deployment/prometheus
+
+    # Grafana Config
+    - name: Deploy Grafana Config
+      run: |
+        kubectl apply -f k8s/grafana-datasources-config.yaml
+        kubectl apply -f k8s/grafana-dashboard-provider-config.yaml
+        kubectl apply -f k8s/grafana-dashboard-json-config.yaml
 
     # Grafana
     - name: Deploy Grafana
       run: |
         kubectl apply -f k8s/grafana-deployment.yaml
         kubectl apply -f k8s/grafana-service.yaml
+        # ConfigMap dashboard/datasource updates need a restart to reliably reload provisioning.
+        kubectl rollout restart deployment/grafana
 
     # Ingress
     - name: Apply ingress
@@ -210,6 +221,82 @@ jobs:
         kubectl rollout status deployment/analytics
         kubectl rollout status deployment/grafana
         kubectl rollout status deployment/prometheus
+
+        echo ""
+        echo "Waiting for Grafana LoadBalancer address (up to ~5 minutes)..."
+        ADDR=""
+        for i in $(seq 1 60); do
+          echo ""
+          echo "--- poll ${i}/60 ($(date -u +%H:%M:%S) UTC) ---"
+          timeout 45s kubectl get svc grafana -o wide 2>&1 || echo "(kubectl get timed out or failed — check cluster connectivity)"
+          JSON=""
+          JSON=$(timeout 45s kubectl get svc grafana -o json 2>/dev/null) || true
+          if [ -n "$JSON" ]; then
+            IP=$(echo "$JSON" | jq -r '(.status.loadBalancer.ingress // []) | map(select(.ip != null and .ip != "")) | .[0].ip // empty')
+            HOST=$(echo "$JSON" | jq -r '(.status.loadBalancer.ingress // []) | map(select(.hostname != null and .hostname != "")) | .[0].hostname // empty')
+            if [ -n "$IP" ]; then
+              ADDR="$IP"
+              break
+            fi
+            if [ -n "$HOST" ]; then
+              ADDR="$HOST"
+              break
+            fi
+          fi
+          sleep 5
+        done
+        if [ -z "$ADDR" ]; then
+          echo ""
+          echo "No LoadBalancer IP/hostname after waiting. Check Events below (quota, Autopilot, or wrong service type)."
+          kubectl get svc grafana -o wide || true
+          kubectl describe svc grafana || true
+        else
+          URL="http://${ADDR}/"
+          echo ""
+          echo "=========================================="
+          echo "  Grafana: ${URL}"
+          echo "=========================================="
+          echo ""
+          echo "::notice title=Grafana URL::${URL}"
+        fi
+
+        echo ""
+        echo "Waiting for Prometheus LoadBalancer address (up to ~5 minutes)..."
+        PADDR=""
+        for i in $(seq 1 60); do
+          echo ""
+          echo "--- prometheus poll ${i}/60 ($(date -u +%H:%M:%S) UTC) ---"
+          timeout 45s kubectl get svc prometheus -o wide 2>&1 || echo "(kubectl get timed out or failed — check cluster connectivity)"
+          PJSON=""
+          PJSON=$(timeout 45s kubectl get svc prometheus -o json 2>/dev/null) || true
+          if [ -n "$PJSON" ]; then
+            PIP=$(echo "$PJSON" | jq -r '(.status.loadBalancer.ingress // []) | map(select(.ip != null and .ip != "")) | .[0].ip // empty')
+            PHOST=$(echo "$PJSON" | jq -r '(.status.loadBalancer.ingress // []) | map(select(.hostname != null and .hostname != "")) | .[0].hostname // empty')
+            if [ -n "$PIP" ]; then
+              PADDR="$PIP"
+              break
+            fi
+            if [ -n "$PHOST" ]; then
+              PADDR="$PHOST"
+              break
+            fi
+          fi
+          sleep 5
+        done
+        if [ -z "$PADDR" ]; then
+          echo ""
+          echo "No Prometheus LoadBalancer IP/hostname after waiting."
+          kubectl get svc prometheus -o wide || true
+          kubectl describe svc prometheus || true
+        else
+          PURL="http://${PADDR}:9090/"
+          echo ""
+          echo "=========================================="
+          echo "  Prometheus: ${PURL}"
+          echo "=========================================="
+          echo ""
+          echo "::notice title=Prometheus URL::${PURL}"
+        fi
 
     - name: Create GitHub Release
       if: "!startsWith(github.ref, 'refs/tags/')"

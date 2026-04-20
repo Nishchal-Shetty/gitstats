@@ -71,11 +71,60 @@
       "fieldConfig": { "defaults": { "unit": "none" }, "overrides": [] }
     },
     {
+      "id": 12,
+      "type": "stat",
+      "title": "Total requests (all-time)",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 9 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(http_requests_total{job=\"gitstats-backend\"})",
+          "refId": "A"
+        }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "orientation": "auto" },
+      "fieldConfig": { "defaults": { "unit": "none", "decimals": 0 }, "overrides": [] }
+    },
+    {
+      "id": 13,
+      "type": "stat",
+      "title": "Satisfied requests (all-time)",
+      "description": "Approx. successful requests = total - 4xx/5xx errors.",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 9 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(http_requests_total{job=\"gitstats-backend\"}) - sum(http_requests_errors_total{job=\"gitstats-backend\"})",
+          "refId": "A"
+        }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "orientation": "auto" },
+      "fieldConfig": { "defaults": { "unit": "none", "decimals": 0 }, "overrides": [] }
+    },
+    {
+      "id": 14,
+      "type": "stat",
+      "title": "Error percentage",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 9 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "100 * sum(http_requests_errors_total{job=\"gitstats-backend\"}) / clamp_min(sum(http_requests_total{job=\"gitstats-backend\"}), 1)",
+          "refId": "A"
+        }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "orientation": "auto" },
+      "fieldConfig": { "defaults": { "unit": "percent", "decimals": 2 }, "overrides": [] }
+    },
+    {
       "id": 5,
       "type": "timeseries",
       "title": "Repo compare outcomes / s",
       "description": "Counter for GET /stats/repo/{owner}/{repo}.",
-      "gridPos": { "h": 8, "w": 18, "x": 6, "y": 9 },
+      "gridPos": { "h": 4, "w": 24, "x": 0, "y": 13 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
