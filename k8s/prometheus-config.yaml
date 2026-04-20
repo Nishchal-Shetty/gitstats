@@ -9,5 +9,6 @@ data:
 
     scrape_configs:
       - job_name: 'backend'
+        metrics_path: /api/metrics
         static_configs:
           - targets: ['backend:80']
