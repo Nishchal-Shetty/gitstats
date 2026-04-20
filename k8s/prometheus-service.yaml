@@ -3,8 +3,10 @@ kind: Service
 metadata:
   name: prometheus
 spec:
+  type: LoadBalancer
   selector:
     app: prometheus
   ports:
-    - port: 9090
+    - name: http
+      port: 9090
       targetPort: 9090
