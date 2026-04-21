@@ -449,16 +449,10 @@ export default function Recommendations() {
     const [username, setUsername] = useState(null);
     const [loading, setLoading] = useState(false);
 
-    // Auto-fill from GitHub login AND auto-fetch recommendations
-    const autoFetched = React.useRef(false);
+    // Auto-fill from GitHub login
     useEffect(() => {
-        if (authUser?.username && !input && !username && !autoFetched.current) {
+        if (authUser?.username && !input && !username) {
             setInput(authUser.username);
-            autoFetched.current = true;
-            // Defer so input state is set before handleSubmit reads it
-            setTimeout(() => {
-                handleSubmitForUser(authUser.username);
-            }, 0);
         }
     }, [authUser]);
     const [error, setError] = useState(null);
@@ -496,7 +490,9 @@ export default function Recommendations() {
         }
     };
 
-    const handleSubmitForUser = async (u) => {
+    const handleSubmit = async (e) => {
+        e?.preventDefault();
+        const u = input.trim();
         if (!u) return;
         setLoading(true);
         setError(null);
@@ -516,11 +512,6 @@ export default function Recommendations() {
         } finally {
             setLoading(false);
         }
-    };
-
-    const handleSubmit = async (e) => {
-        e?.preventDefault();
-        handleSubmitForUser(input.trim());
     };
 
     return (
