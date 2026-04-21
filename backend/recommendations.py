@@ -7,6 +7,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, UploadFile, File
 from pydantic import BaseModel, Field
+from fastapi_cache.decorator import cache
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -162,6 +163,7 @@ async def _persist_live_repos(live_recs: list[dict]) -> None:
 
 
 @router.get("/{username}")
+@cache(expire=3600, namespace="recommendations")
 async def get_recommendations(
     username: str,
     background_tasks: BackgroundTasks,

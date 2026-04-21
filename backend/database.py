@@ -1,4 +1,5 @@
 import os
+from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import DeclarativeBase, sessionmaker, relationship
 from sqlalchemy import (
@@ -90,6 +91,57 @@ class User(Base):
     created_at = Column(DateTime, server_default=func.now())
     last_login = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
+class GenreSummary(Base):
+    __tablename__ = "genre_summaries"
+
+    id = Column(Integer, primary_key=True)
+    genre = Column(String, unique=True, nullable=False)
+    repo_count = Column(Integer, default=0)
+    avg_stars = Column(Float, default=0)
+    avg_forks = Column(Float, default=0)
+    avg_issues = Column(Float, default=0)
+    top_languages = Column(JSON, default=list)  #[{"language": "Python", "count": 42}]
+    top_repos = Column(JSON, default=list)      #[{"full_name": "...", "stars": ...}]
+    computed_at = Column(DateTime, default=datetime.now())
+
+class LanguageSummary(Base):
+    __tablename__ = "language_summaries"
+
+    id = Column(Integer, primary_key=True)
+    language = Column(String, unique=True, nullable=False)
+    repo_count = Column(Integer, default=0)
+    avg_stars = Column(Float, default=0)
+    avg_forks = Column(Float, default=0)
+    avg_issues = Column(Float, default=0)
+    top_genres = Column(JSON, default=list)  #[{"genre": "web_frontend", "count": 42}]
+    top_repos = Column(JSON, default=list)      #[{"full_name": "...", "stars": ...}]
+    computed_at = Column(DateTime, default=datetime.now())
+
+class PlatformSummary(Base):
+    __tablename__ = "platform_summaries"
+
+    id = Column(Integer, primary_key=True)
+    total_repos = Column(Integer, default=0)
+    total_developers = Column(Integer, default=0)
+    total_genres = Column(Integer, default=0)
+    language_distribution = Column(JSON, default=dict)  #{"Python": 120, "Go": 80}
+    genre_distribution = Column(JSON, default=dict)     #{"ios": 40, "unity": 60}
+    top_repos_overall = Column(JSON, default=list)
+    computed_at = Column(DateTime, default=datetime.now())
+
+class TrendingRepos(Base):
+    __tablename__ = "trending_repos"
+
+    id = Column(Integer, primary_key=True)
+    full_name = Column(String, nullable=False)
+    genre = Column(String)
+    stars = Column(Integer, default=0)
+    forks = Column(Integer, default=0)
+    language = Column(String)
+    description = Column(String)
+    topics = Column(JSON, default=list)
+    trend_score = Column(Float, default=0)
+    computed_at = Column(DateTime, default=datetime.now())
 
 async def get_db():
     async with AsyncSessionLocal() as session:

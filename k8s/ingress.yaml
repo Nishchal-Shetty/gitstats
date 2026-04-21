@@ -9,15 +9,14 @@ spec:
     - http:
         paths:
           - path: /api
-            pathType: ImplementationSpecific
+            pathType: Prefix
             backend:
               service:
                 name: backend
                 port:
                   number: 80
-
           - path: /
-            pathType: ImplementationSpecific
+            pathType: Prefix
             backend:
               service:
                 name: frontend

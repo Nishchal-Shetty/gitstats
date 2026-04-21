@@ -20,8 +20,8 @@ spec:
 
           resources:
             requests:
-              cpu: "250m"
-              memory: "256Mi"
+              cpu: "100m"
+              memory: "192Mi"
             limits:
               cpu: "500m"
               memory: "512Mi"
@@ -34,8 +34,9 @@ spec:
             httpGet:
               path: /health
               port: 8080
-            initialDelaySeconds: 5
-            periodSeconds: 10
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 6
 
           livenessProbe:
             httpGet:
